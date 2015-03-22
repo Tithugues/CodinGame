@@ -10,12 +10,14 @@ function debug($var, $force = false) {
 
 class Map {
     protected $_map = null;
+    protected $_mapSurf = array();
     protected $_width = null;
     protected $_height = null;
     protected $_currentSurface = 0;
+    protected $_stack = array();
 
     public function __construct($map, $width, $height) {
-        $this->_map = str_split($map);
+        $this->_map = $map;
         $this->_width = $width;
         $this->_height = $height;
         $this->_length = $width * $height;
@@ -26,66 +28,54 @@ class Map {
     }
 
     public function explore($x, $y) {
-        $index = $this->_getIndex($x, $y);
-        debug('explore', true);
-        debug($index, true);
-        if ($index < 0 || $this->_length <= $index) {
-            return false;
-        }
-
-        debug($this->_map[$index], true);
-
-        //Earth
-        if ('#' === $this->_map[$index]) {
-            return 0;
-        }
-
-        //Not earth, not water
-        if ('O' !== $this->_map[$index]) {
-            return $this->_map[$index];
-        }
+        $this->_addStack($x, $y);
+        $this->_explore();
 
         unset($this->_currentSurface);
-        $this->_currentSurface = 1;
-        $this->_map[$index] =& $this->_currentSurface;
+        $this->_currentSurface = 0;
 
-        $this->_explore($x + 1, $y);
-        $this->_explore($x - 1, $y);
-        $this->_explore($x, $y + 1);
-        $this->_explore($x, $y - 1);
-
-        return $this->_currentSurface;
+        $index = $this->_getIndex($x, $y);
+        return $this->_mapSurf[$index];
     }
 
-    protected function _explore($x, $y) {
+    protected function _explore() {
+        while (null !== ($coordinates = array_shift($this->_stack))) {
+            $x = array_shift($coordinates);
+            $y = array_shift($coordinates);
+            $index = $this->_getIndex($x, $y);
+            ++$this->_mapSurf[$index];
+
+            if ($this->_width !== $x + 1) {
+                $this->_addStack($x + 1, $y);
+            }
+            if (0 !== $x) {
+                $this->_addStack($x - 1, $y);
+            }
+            if ($this->_height !== $y + 1) {
+                $this->_addStack($x, $y + 1);
+            }
+            if (0 !== $y) {
+                $this->_addStack($x, $y - 1);
+            }
+        }
+
+        return $this;
+    }
+
+    protected function _addStack($x, $y) {
         $index = $this->_getIndex($x, $y);
-        debug('subexplore', true);
-        debug($x, true);
-        debug($y, true);
-        debug($index, true);
-        if ($index < 0 || $this->_length <= $index) {
-            return false;
+        if (isset($this->_mapSurf[$index])) {
+            return $this;
         }
 
-        //Earth
         if ('#' === $this->_map[$index]) {
-            return 0;
+            $this->_mapSurf[$index] = 0;
+            return $this;
         }
 
-        //Not earth, not water
-        if ('O' !== $this->_map[$index]) {
-            return $this->_map[$index];
-        }
-
-        $this->_currentSurface++;
-        $this->_map[$index] =& $this->_currentSurface;
-
-        $this->_explore($x + 1, $y);
-        $this->_explore($x - 1, $y);
-        $this->_explore($x, $y + 1);
-        $this->_explore($x, $y - 1);
-
-        return $this->_currentSurface;
+        $this->_mapSurf[$index] =& $this->_currentSurface;
+        $this->_stack[] = array($x, $y);
+        return $this;
     }
 }
 
@@ -108,3 +98,6 @@ for ($rowId = 0; $rowId < $numberCoordinates; $rowId++)
 }
 
 echo implode("\n", $surfaces) . "\n";
+
+/*debug(number_format(memory_get_peak_usage()), true);
+debug(number_format(memory_get_peak_usage(true)), true);*/
