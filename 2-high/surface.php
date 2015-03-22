@@ -8,96 +8,103 @@ function debug($var, $force = false) {
     }
 }
 
+class Map {
+    protected $_map = null;
+    protected $_width = null;
+    protected $_height = null;
+    protected $_currentSurface = 0;
+
+    public function __construct($map, $width, $height) {
+        $this->_map = str_split($map);
+        $this->_width = $width;
+        $this->_height = $height;
+        $this->_length = $width * $height;
+    }
+
+    protected function _getIndex($x, $y) {
+        return $y * $this->_width + $x;
+    }
+
+    public function explore($x, $y) {
+        $index = $this->_getIndex($x, $y);
+        debug('explore', true);
+        debug($index, true);
+        if ($index < 0 || $this->_length <= $index) {
+            return false;
+        }
+
+        debug($this->_map[$index], true);
+
+        //Earth
+        if ('#' === $this->_map[$index]) {
+            return 0;
+        }
+
+        //Not earth, not water
+        if ('O' !== $this->_map[$index]) {
+            return $this->_map[$index];
+        }
+
+        unset($this->_currentSurface);
+        $this->_currentSurface = 1;
+        $this->_map[$index] =& $this->_currentSurface;
+
+        $this->_explore($x + 1, $y);
+        $this->_explore($x - 1, $y);
+        $this->_explore($x, $y + 1);
+        $this->_explore($x, $y - 1);
+
+        return $this->_currentSurface;
+    }
+
+    protected function _explore($x, $y) {
+        $index = $this->_getIndex($x, $y);
+        debug('subexplore', true);
+        debug($x, true);
+        debug($y, true);
+        debug($index, true);
+        if ($index < 0 || $this->_length <= $index) {
+            return false;
+        }
+
+        //Earth
+        if ('#' === $this->_map[$index]) {
+            return 0;
+        }
+
+        //Not earth, not water
+        if ('O' !== $this->_map[$index]) {
+            return $this->_map[$index];
+        }
+
+        $this->_currentSurface++;
+        $this->_map[$index] =& $this->_currentSurface;
+
+        $this->_explore($x + 1, $y);
+        $this->_explore($x - 1, $y);
+        $this->_explore($x, $y + 1);
+        $this->_explore($x, $y - 1);
+
+        return $this->_currentSurface;
+    }
+}
+
 fscanf(STDIN, "%d", $width);
 fscanf(STDIN, "%d", $height);
-$map = array();
+$map = null;
 for ($rowId = 0; $rowId < $height; $rowId++)
 {
     fscanf(STDIN, "%s", $line);
-    $map[] = $line;
+    $map .= $line;
 }
+$map = new Map($map, $width, $height);
 
 fscanf(STDIN, "%d", $numberCoordinates);
-$searchedLakes = array();
+$surfaces = array();
 for ($rowId = 0; $rowId < $numberCoordinates; $rowId++)
 {
     fscanf(STDIN, "%d %d", $x, $y);
-    $searchedLakes[] = array('x' => $x, 'y' => $y);
+    $surfaces[] = $map->explore($x, $y);
 }
 
-function foundUnreadWatersClosedTo($map, &$read, $x, $y, $lakeId) {
-    debug('foundUnreadWatersClosedTo: ' . $x . '-' . $y);
-    $waters = array();
-    if (
-        isset($map[$y]{$x-1})
-        && 'O' === $map[$y]{$x-1}
-        && !isset($read[$x-1][$y])
-    ) {
-        $read[$x-1][$y] = $lakeId;
-        $waters[] = array('x' => $x-1, 'y' => $y);
-    }
-    if (
-        isset($map[$y]{$x+1})
-        && 'O' === $map[$y]{$x+1}
-        && !isset($read[$x+1][$y])
-    ) {
-        $read[$x+1][$y] = $lakeId;
-        $waters[] = array('x' => $x+1, 'y' => $y);
-    }
-    if (
-        isset($map[$y-1]{$x})
-        && 'O' === $map[$y-1]{$x}
-        && !isset($read[$x][$y-1])
-    ) {
-        $read[$x][$y-1] = $lakeId;
-        $waters[] = array('x' => $x, 'y' => $y-1);
-    }
-    if (
-        isset($map[$y+1]{$x})
-        && 'O' === $map[$y+1]{$x}
-        && !isset($read[$x][$y+1])
-    ) {
-        debug('ajouté');
-        $read[$x][$y+1] = $lakeId;
-        $waters[] = array('x' => $x, 'y' => $y+1);
-    }
-    debug($waters);
-    return $waters;
-}
-
-function exploreLake($map, &$read, $x, $y, $lakeId) {
-    $stack = array(array('x' => $x, 'y' => $y));
-
-    $surface = 0;
-
-    while (!empty($stack)) {
-        $node = array_shift($stack);
-        debug('while: ' . $node['x'] . '-' . $node['y']);
-
-        $read[$node['x']][$node['y']] = $lakeId;
-        ++$surface;
-        $stack = array_merge($stack, foundUnreadWatersClosedTo($map, $read, $node['x'], $node['y'], $lakeId));
-    }
-
-    return $surface;
-}
-
-$read = array();
-$lakes = array();
-
-foreach ($searchedLakes as $searchedLake) {
-    debug('Search for lake in ' . $searchedLake['x'] . '-' . $searchedLake['y']);
-    if ('#' === $map[$searchedLake['y']]{$searchedLake['x']}) {
-        echo "0\n";
-        continue;
-    }
-
-    if (isset($read[$searchedLake['x']][$searchedLake['y']])) {
-        echo $lakes[$read[$searchedLake['x']][$searchedLake['y']]] . "\n";
-        continue;
-    }
-
-    $lakeId = count($lakes);
-    $lakes[$lakeId] = exploreLake($map, $read, $searchedLake['x'], $searchedLake['y'], $lakeId);
-    echo $lakes[$lakeId] . "\n";
-}
+echo implode("\n", $surfaces) . "\n";
