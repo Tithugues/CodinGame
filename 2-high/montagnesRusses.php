@@ -15,51 +15,100 @@ function debug($var, $force = false) {
     }
 }
 
+function initGroups(&$groups, $pos) {
+    debug('Init group: ' . $pos);
+    $groups[$pos] = array(
+        'sizes' => array(),
+        'sum' => 0,
+        'nb' => 0
+    );
+}
+
+function addGroup(&$groups, $group, &$maxIndex, $nbPlaces) {
+    debug('addGroup: ' . $group);
+    if (!isset($groups[$maxIndex])) {
+        if (empty($groups)) {
+            ++$maxIndex;
+        }
+        initGroups($groups, $maxIndex);
+        debug($groups);
+    }
+    debug('Index: ' . $maxIndex);
+
+    if ($groups[$maxIndex]['sum'] + $group > $nbPlaces) {
+        initGroups($groups, ++$maxIndex);
+        debug('New index: ' . $maxIndex);
+    }
+
+    $groups[$maxIndex]['sizes'][] = $group;
+    $groups[$maxIndex]['sum'] += $group;
+    $groups[$maxIndex]['nb']++;
+    debug($groups[$maxIndex]);
+}
+
 fscanf(STDIN, "%d %d %d",
     $nbPlaces,
-    $nbTurnsForDay,
+    $nbTurnsPerDay,
     $nbGroups
 );
-$groups = array();
+debug('Nb places: ' . $nbPlaces, true);
+debug($nbTurnsPerDay);
+debug($nbGroups);
+
+$maxIndex = 0;
+initGroups($groups, $maxIndex);
 for ($i = 0; $i < $nbGroups; $i++)
 {
     fscanf(STDIN, "%d",
         $Pi
     );
-    $groups[] = $Pi;
+    addGroup($groups, $Pi, $maxIndex, $nbPlaces);
 }
-debug($nbPlaces);
-debug($nbTurnsForDay);
-debug($nbGroups);
-//debug($groups);
+debug($groups);
 
 $nbDirhams = 0;
 $pos = 0;
-while ($nbTurnsForDay !== 0) {
-    debug('Still ' . $nbTurnsForDay . " turns", true);
-    $nbPlacesLeft = $nbPlaces;
-    $runningGroups = array();
-    while (true) {
-        $nbPersons = isset($groups[$pos]) ? $groups[$pos] : false;
-        debug($nbPersons);
-        if (false === $nbPersons || $nbPersons > $nbPlacesLeft) {
-            break;
-        }
-        unset($groups[$pos++]);
-        $nbPlacesLeft -= $nbPersons;
-        $runningGroups[] = $nbPersons;
-    }
+$nbGroupsPassed = 0;
+$nbTurns = $nbTurnsPerDay;
+while (0 !== $nbTurns) {
+    debug('Still ' . $nbTurns . " turns", true);
+    debug($groups);
+    $runningGroups = $groups[$pos];
+    unset($groups[$pos]);
     debug($runningGroups);
-
-    //$groups = array_merge($groups, $runningGroups);
-    foreach ($runningGroups as $group) {
-        $groups[] = $group;
+    foreach ($runningGroups['sizes'] as $group) {
+        addGroup($groups, $group, $maxIndex, $nbPlaces);
     }
+    unset($runningGroups['sizes']);
+
+    $nbDirhams += $runningGroups['sum'];
+    $nbGroupsPassed += $runningGroups['nb'];
     unset($runningGroups);
+
     debug($groups);
 
-    $nbDirhams += ($nbPlaces - $nbPlacesLeft);
-    $nbTurnsForDay--;
+    ++$pos;
+    --$nbTurns;
+
+    if (0 === $nbGroupsPassed%$nbGroups && 0 !== $nbTurns) {
+        $oldDebug = DEBUG;
+        define('DEBUG', true);
+        debug('cycle');
+        debug('nbGroupsPassed: '. $nbGroupsPassed);
+        debug('nbGroups: '. $nbGroups);
+        debug('nbTurnsPerDay: '. $nbTurnsPerDay);
+        debug('nbTurns: '. $nbTurns);
+        debug('nbDirhams: '. $nbTurns);
+        $nbTurnsForCycle = $nbTurnsPerDay - $nbTurns;
+        $ratio = (int)floor($nbTurnsPerDay / $nbTurnsForCycle);
+        $nbTurns = $nbTurnsPerDay%$ratio;
+        $nbDirhams *= $ratio;
+        debug('nbTurnsForCycle: '. $nbTurnsForCycle);
+        debug('ratio: '. $ratio);
+        debug('nbTurns: '. $nbTurns);
+        debug('nbDirhams: '. $nbTurns);
+        define('DEBUG', $oldDebug);
+    }
 }
 
 echo $nbDirhams . "\n";

@@ -39,7 +39,7 @@ class Map {
         $this->_previousX = $x;
         $this->_previousY = $y;
 
-        $column = array_fill(0, $h, true);
+        $column = array('min' => 0, 'max' => $this->_height - 1);
         $this->_map = array_fill(0, $w, $column);
     }
 

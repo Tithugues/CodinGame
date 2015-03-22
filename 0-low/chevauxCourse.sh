@@ -6,18 +6,14 @@ done
 
 readarray -t sPowers < <(for a in "${powers[@]}"; do echo "$a"; done | sort -n)
 
-diffMin=-1
-prev=-1
-for a in ${sPowers[@]}; do
-    if [[ $prev -eq -1 ]]; then
-        prev=$a
-        continue
-    fi
-    diffTmp=$(($a-$prev))
-    if [[ $diffMin -eq -1 ]] || [[ $diffTmp -lt $diffMin ]]; then
+diffMin=$((${sPowers[1]}-${sPowers[0]}))
+prev=${sPowers[1]}
+for (( a=2; a<N; a++ )); do
+    diffTmp=$((${sPowers[a]}-$prev))
+    if [[ $diffTmp -lt $diffMin ]]; then
         diffMin=$diffTmp
     fi
-    prev=$a
+    prev=${sPowers[a]}
 done
 
 echo $diffMin

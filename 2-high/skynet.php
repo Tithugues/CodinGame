@@ -30,18 +30,20 @@ class Dijkstra {
     public $nodes = array();
     public $stack = null;
     public $links = array();
+    public $gateways = array();
 
-    public function __construct($nbNodes, $start, &$links) {
+    public function __construct($nbNodes, $start, &$links, $gateways) {
         $this->stack = new Stack();
-        $this->initialise($nbNodes, $start, $links);
+        $this->initialise($nbNodes, $start, $links, $gateways);
     }
 
-    public function initialise($nbNodes, $start, &$links) {
+    public function initialise($nbNodes, $start, &$links, $gateways) {
         for ($i = 0; $i < $nbNodes; $i++) {
             $this->nodes[$i] = new Node($i);
         }
 
         $this->links =& $links;
+        $this->gateways = $gateways;
 
         $this->stack->add($this->nodes[$start]);
 
@@ -62,7 +64,7 @@ class Dijkstra {
             foreach ($children as $nodeId => $dist) {
                 /** @var Node $node */
                 $node = $this->nodes[$nodeId];
-                if ($node->dist === null || $closest->dist + 1 < $node->dist) {
+                if ($node->dist === null || $node->dist > $closest->dist + 1) {
                     $node->dist = $closest->dist + 1;
                     $node->prev = array($closest->id => true);
                 } elseif ($node->dist === $closest->dist + 1) {
@@ -71,6 +73,38 @@ class Dijkstra {
                 $this->stack->add($node);
             }
         }
+    }
+
+    public function getLinksToGateway($node) {
+        $destinations = array_keys($this->links[$node]);
+        return array_intersect($destinations, array_keys($this->gateways));
+    }
+
+    public function getNumberLinksToGatewayFor($node) {
+        return count($this->getLinksToGateway($node));
+    }
+
+    public function getNumberLinksToGatewayUntil($node) {
+        debug('Node: ' . $node);
+        if (0 === $this->nodes[$node]->dist) {
+            return $this->getNumberLinksToGatewayFor($node);
+        }
+
+        debug('Check prev: ', true);
+        debug($this->nodes[$node]->prev, true);
+        $prevs = array_keys($this->nodes[$node]->prev);
+        $closerToGateWay = null;
+        $nbLinksForCloser = null;
+        foreach ($prevs as $prev) {
+            $nbLinks = $this->getNumberLinksToGatewayFor($prev);
+            if (null === $closerToGateWay || $nbLinks > $nbLinksForCloser) {
+                $closerToGateWay = $prev;
+                $nbLinksForCloser = $nbLinks;
+            }
+        }
+        debug($closerToGateWay, true);
+        return $this->getNumberLinksToGatewayFor($node)
+            + $this->getNumberLinksToGatewayUntil($closerToGateWay);
     }
 }
 
@@ -147,11 +181,9 @@ for ($i = 0; $i < $E; $i++)
     fscanf(STDIN, "%d",
         $EI // the index of a gateway node
     );
-    $gateways[$i] = $EI;
+    $gateways[$EI] = $links[$EI];
+    unset($links[$EI]);
 }
-
-/*error_log(var_export($links, true));
-error_log(var_export($gateways, true));*/
 
 // game loop
 while (TRUE)
@@ -163,82 +195,59 @@ while (TRUE)
     // Write an action using echo(). DON'T FORGET THE TRAILING \n
     // To debug (equivalent to var_dump): error_log(var_export($var, true));
 
-    $d = new Dijkstra($N, $SI, $links);
+    $d = new Dijkstra($N, $SI, $links, $gateways);
     $d->mesurer();
 
-    //Get all nodes linked to a gateway
-    $prevs = array();
-    foreach ($gateways as $gateway) {
-        $prevs = array_merge($prevs, array_keys($links[$gateway]));
-        debug($prevs);
-    }
-
-    //Find the more used node linked to a gateway
-    $prevsNbUses = array_count_values($prevs);
-    unset($prevs);
-
-    debug($prevsNbUses, true);
-
     //Find critical nodes
-    $mostCritical = null;
-    $criticalityMostCritical = null;
-    $mostUsed = null;
-    $maxUses = null;
-    //$criticalities = array();
-    foreach ($prevsNbUses as $prev => $nbGatewaysLinked) {
-        debug('Prev: ' . $prev, true);
-        $uses = $prevsNbUses[$prev];
-        $criticality = $uses - $d->nodes[$prev]->dist;
-        //$criticalities[$prev] = $criticality;
-        debug('Criticality: ' . $criticality, true);
-        debug('Uses: ' . $uses, true);
-        if (null === $mostCritical) {
-            $mostCritical = $prev;
-            $criticalityMostCritical = $criticality;
-            $mostUsed = $prev;
-            $maxUses = $uses;
-            continue;
-        }
-        debug('Current dist: ' . $d->nodes[$prev]->dist, true);
-        debug('Most critical dist: ' . $d->nodes[$mostCritical]->dist, true);
-        debug('Current nb uses: ' . $uses, true);
-        debug('Most critical nb uses: ' . $maxUses, true);
-        if ($criticalityMostCritical < $criticality) {
-            debug('New most critical! > ' . $criticalityMostCritical, true);
-            $mostCritical = $prev;
-            $criticalityMostCritical = $criticality;
-        } elseif ($criticalityMostCritical === $criticality && $d->nodes[$prev]->dist > $d->nodes[$mostCritical]->dist) {
-            debug('New most critical! because closer!', true);
-            $mostCritical = $prev;
-        }
-        if ($maxUses < $uses) {
-            debug('New most used! > ' . $maxUses, true);
-            $mostUsed = $prev;
-            $maxUses = $uses;
-        } elseif ($maxUses === $uses && $d->nodes[$prev]->dist < $d->nodes[$mostUsed]->dist) {
-            debug('New most used and closer!', true);
-            $mostUsed = $prev;
+    if ($d->getNumberLinksToGatewayFor($SI)) {
+        $mostCritical = $SI;
+        $mostCriticality = 1;
+    } else {
+        //Get all nodes linked to a gateway
+        $prevs = array();
+        foreach ($gateways as $gateway => $children) {
+            $prevs = array_merge($prevs, array_keys($children));
+        };
+        $prevs = array_unique($prevs);
+        debug($prevs);
+
+
+        $mostCritical = null;
+        $mostCriticality = null;
+        foreach ($prevs as $prev) {
+            debug('Node: ' . $prev, true);
+            $nbLinksUntil = $d->getNumberLinksToGatewayUntil($prev);
+            debug('Nb links: ' . $nbLinksUntil, true);
+            debug('Dist: ' . $d->nodes[$prev]->dist, true);
+            $criticality = $nbLinksUntil - $d->nodes[$prev]->dist;
+            debug('Criticality: ' . $criticality, true);
+            if (
+                null === $mostCritical
+                || $criticality > $mostCriticality
+                || (
+                    $criticality === $mostCriticality
+                    && $d->nodes[$prev]->dist < $d->nodes[$mostCritical]->dist
+                )
+            ) {
+                debug('New most critical', true);
+                $mostCritical = $prev;
+                $mostCriticality = $criticality;
+            }
         }
     }
 
     debug($mostCritical);
-    debug($criticalityMostCritical);
-
-    if ($criticalityMostCritical > 0) {
-        $in = $mostCritical;
-    } else {
-        $in = $mostUsed;
-    }
+    debug($mostCriticality);
 
     $out = null;
-    foreach ($gateways as $gateway) {
-        if (isset($links[$in][$gateway])) {
+    foreach ($gateways as $gateway => $children) {
+        if (isset($links[$mostCritical][$gateway])) {
             $out = $gateway;
             break;
         }
     }
 
-    echo $in . ' ' . $out . "\n";
-    unset($links[$in][$out]);
-    unset($links[$out][$in]);
+    echo $mostCritical . ' ' . $out . "\n";
+    unset($links[$mostCritical][$out]);
+    unset($gateways[$out][$mostCritical]);
 }

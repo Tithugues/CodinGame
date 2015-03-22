@@ -8,50 +8,6 @@ function debug($var, $force = false) {
     }
 }
 
-class Node {
-    protected $_x = null;
-    protected $_y = null;
-    protected $_content = null;
-    protected $_read = false;
-    protected $_lakeId = null;
-
-    public function __construct($x, $y, $content) {
-        $this->_x = $x;
-        $this->_y = $y;
-        $this->_content = $content;
-    }
-
-    public function getX() {
-        return $this->_x;
-    }
-
-    public function getY() {
-        return $this->_y;
-    }
-
-    public function getContent() {
-        return $this->_content;
-    }
-
-    public function isRead() {
-        return $this->_read;
-    }
-
-    public function read() {
-        $this->_read = true;
-        return $this;
-    }
-
-    public function getLakeId() {
-        return $this->_lakeId;
-    }
-
-    public function setLakeId($lakeId) {
-        $this->_lakeId = $lakeId;
-        return $this;
-    }
-}
-
 class Lake {
     protected $_id = null;
     protected $_surface = 0;
@@ -71,49 +27,64 @@ class Lake {
 }
 
 class Map {
-    /** @var Node[][] */
+    /** @var array[][][] */
     protected $_nodes = array();
     /** @var Lake[] */
     protected $_lakes = array();
     /** @var Node[] */
     protected $_stack = array();
 
-    public function addNode(Node $node) {
-        $this->_nodes[$node->getX()][$node->getY()] = $node;
+    public function addNode($x, $y, $content) {
+        $this->_nodes[$x][$y] = array(
+            'x' => $x,
+            'y' => $y,
+            'content' => $content,
+            'lakeId' => null,
+            'read' => false
+        );
     }
 
     public function foundUnreadWatersClosedTo($x, $y) {
-        /** @var Node[] $waters */
         $waters = array();
         if (
-            isset($this->_nodes[$x - 1])
-            && 'O' === $this->_nodes[$x - 1][$y]->getContent()
-            && false === $this->_nodes[$x - 1][$y]->isRead()
+            isset($this->_nodes[$x-1])
+            && 'O' === $this->_nodes[$x-1][$y]['content']
+            && false === $this->_nodes[$x-1][$y]['read']
         ) {
+            debug('ajoutée 1');
+            $this->_nodes[$x-1][$y]['read'] = true;
             $waters[] = $this->_nodes[$x-1][$y];
         }
         if (
             isset($this->_nodes[$x+1])
-            && 'O' === $this->_nodes[$x+1][$y]->getContent()
-            && false === $this->_nodes[$x+1][$y]->isRead()
+            && 'O' === $this->_nodes[$x+1][$y]['content']
+            && false === $this->_nodes[$x+1][$y]['read']
         ) {
+            debug('ajoutée 2');
+            $this->_nodes[$x+1][$y]['read'] = true;
             $waters[] = $this->_nodes[$x+1][$y];
         }
         if (
             isset($this->_nodes[$x][$y-1])
-            && 'O' === $this->_nodes[$x][$y-1]->getContent()
-            && false === $this->_nodes[$x][$y-1]->isRead()
+            && 'O' === $this->_nodes[$x][$y-1]['content']
+            && false === $this->_nodes[$x][$y-1]['read']
         ) {
+            debug('ajoutée 3');
+            $this->_nodes[$x][$y-1]['read'] = true;
             $waters[] = $this->_nodes[$x][$y-1];
         }
         if (
             isset($this->_nodes[$x][$y+1])
-            && 'O' === $this->_nodes[$x][$y+1]->getContent()
-            && false === $this->_nodes[$x][$y+1]->isRead()
+            && 'O' === $this->_nodes[$x][$y+1]['content']
+            && false === $this->_nodes[$x][$y+1]['read']
         ) {
+            debug('ajoutée 4');
+            $this->_nodes[$x][$y+1]['read'] = true;
             $waters[] = $this->_nodes[$x][$y+1];
         }
         debug('foundUnreadWatersClosedTo');
+        debug($x);
+        debug($y);
         debug($waters);
         return $waters;
     }
@@ -125,11 +96,11 @@ class Map {
         debug($this->_nodes[$x][$y]);
         $startNode = $this->_nodes[$x][$y];
 
-        if ('#' === $startNode->getContent()) {
+        if ('#' === $startNode['content']) {
             return 0;
         }
 
-        if (null !== ($lakeId = $startNode->getLakeId())) {
+        if (null !== ($lakeId = $startNode['lakeId'])) {
             return $this->_lakes[$lakeId]->getSurface();
         }
 
@@ -141,16 +112,17 @@ class Map {
 
         while (!empty($this->_stack)) {
             debug('while');
-            /** @var Node $node */
             $node = array_shift($this->_stack);
-            if ($node->isRead()) {
+            //$node =& $this->_nodes[$node['x']][$node['y']];
+            /*if ($this->_nodes[$node['x']][$node['y']]['read']) {
+                debug('already read');
                 continue;
-            }
+            }*/
 
-            $node->read();
-            $node->setLakeId($lakeId);
+            $this->_nodes[$node['x']][$node['y']]['read'] = true;
+            $this->_nodes[$node['x']][$node['y']]['lakeId'] = $lakeId;
             $lake->addSurface();
-            $this->_stack = array_merge($this->_stack, $this->foundUnreadWatersClosedTo($node->getX(), $node->getY()));
+            $this->_stack = array_merge($this->_stack, $this->foundUnreadWatersClosedTo($this->_nodes[$node['x']][$node['y']]['x'], $this->_nodes[$node['x']][$node['y']]['y']));
         }
 
         return $lake->getSurface();
@@ -162,10 +134,11 @@ fscanf(STDIN, "%d", $height);
 $map = new Map();
 for ($rowId = 0; $rowId < $height; $rowId++)
 {
-    $line = stream_get_line(STDIN, $width, "\n");
-    $contents = str_split($line);
-    foreach ($contents as $colId => $content) {
-        $map->addNode(new Node($colId, $rowId, $content));
+    debug('read: ' . $rowId, true);
+    fscanf(STDIN, "%s", $line);
+    $length = strlen($line);
+    for ($colId = 0; $colId < $length; ++$colId) {
+        $map->addNode($colId, $rowId, $line{$colId});
     }
 }
 fscanf(STDIN, "%d", $numberCoordinates);
