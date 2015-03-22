@@ -32,14 +32,28 @@ class Fx {
         return $this->_a;
     }
 
+    /**
+     * Get "b" constant
+     * @return float
+     */
     public function getB() {
         return $this->_b;
     }
 
+    /**
+     * Calculate Y from X
+     * @param float $x
+     * @return float
+     */
     public function getY($x) {
         return $this->getA() * $x + $this->getB();
     }
 
+    /**
+     * Calculate X from Y
+     * @param float $y
+     * @return float
+     */
     public function getXFromY($y) {
         return ($y - $this->getB()) / $this->getA();
     }
