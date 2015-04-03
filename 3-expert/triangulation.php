@@ -1,6 +1,6 @@
 <?php
 
-define('DEBUG', false);
+define('DEBUG', true);
 
 function _d($var, $force = false) {
     if (DEBUG || $force) {
@@ -79,6 +79,9 @@ class Map {
     const RIGHT = 3;
     const NOT_LIMIT = 4;
 
+    const ASCENDING = true;
+    const DESCENDINg = false;
+
     /** @var int Map width */
     protected $_width = null;
     /** @var int Map height */
@@ -93,6 +96,8 @@ class Map {
     protected $_map = array();
 
     protected $_firstMoves = 3;
+
+    protected $_mediane = self::ASCENDING;
 
     public function __construct($w, $h, $x, $y) {
         $this->_width = $w;
@@ -121,11 +126,28 @@ class Map {
         $maxX = max($xKeys);
 
         //Get middle points of these columns => this is the median.
-        $medianeYForMinX = ($this->_map[$minX]['min'] + $this->_map[$minX]['max']) / 2;
-        $medianeYForMaxX = ($this->_map[$maxX]['min'] + $this->_map[$maxX]['max']) / 2;
+        /*$medianeYForMinX = ($this->_map[$minX]['min'] + $this->_map[$minX]['max']) / 2;
+        $medianeYForMaxX = ($this->_map[$maxX]['min'] + $this->_map[$maxX]['max']) / 2;*/
+
+        //@todo If on one side, min = max, get middle of the opposite side.
+        if (self::ASCENDING === $this->_mediane) {
+            $yForMinX = $this->_map[$minX]['min'];
+            $yForMaxX = $this->_map[$maxX]['max'];
+        } else {
+            $yForMinX = $this->_map[$minX]['max'];
+            $yForMaxX = $this->_map[$maxX]['min'];
+        }
+
+        _d('Mediane:');
+        _d($minX);
+        _d($yForMinX);
+        _d($maxX);
+        _d($yForMaxX);
 
         //Get f(x) for the median.
-        $fMediane = $this->_getFx($minX, $medianeYForMinX, $maxX, $medianeYForMaxX);
+        $fMediane = $this->_getFx($minX, $yForMinX, $maxX, $yForMaxX);
+
+        _d($fMediane);
 
         //If median is vertical...
         if (false === $fMediane) {
@@ -145,15 +167,18 @@ class Map {
 
         //Get f(x) perpendicular to this mediane, going through current position. Generate new X Y.
         $fPerpendicular = $this->_getFPerpendicular(
-            $minX, $medianeYForMinX, $maxX, $medianeYForMaxX, $this->_currentX, $this->_currentY
+            $minX, $yForMinX, $maxX, $yForMaxX, $this->_currentX, $this->_currentY
         );
+
+        _d('Perpendicular:');
+        _d($fPerpendicular);
 
         //If mediane is horizontal, perpendicular should be vertical.
         if (false === $fPerpendicular) {
             _d('Vertical perpendicular');
             $x = $this->_currentX;
 
-            $medianeY = round(($medianeYForMinX + $medianeYForMaxX) / 2);
+            $medianeY = round(($yForMinX + $yForMaxX) / 2);
             $y = $medianeY + ($medianeY - $this->_currentY);
 
             if (true === $move) {
@@ -163,14 +188,33 @@ class Map {
             return array($x, $y);
         }
 
-        //Find place of new point. We know current point. We should go the point
+        //Find place of new point. We know current point. We should go to the symetric point of current, with respect to the mediane.
         $crossX = $fMediane->getCrossingX($fPerpendicular);
 
+        _d('crossX');
+        _d($crossX);
+        _d($crossX + ($crossX - $this->_currentX));
+
         $x = round($crossX + ($crossX - $this->_currentX));
+
+        if ($x < 0) {
+            $x = 0;
+        } elseif ($this->_width <= $x) {
+            $x = $this->_width - 1;
+        }
+
+        _d($fPerpendicular->getY($x));
         $y = round($fPerpendicular->getY($x));
+
+        if ($x < 0) {
+            $x = 0;
+        } elseif ($this->_width <= $x) {
+            $x = $this->_width - 1;
+        }
 
         if (true === $move) {
             $this->move($x, $y);
+            $this->_mediane = !$this->_mediane;
         }
 
         return array($x, $y);
