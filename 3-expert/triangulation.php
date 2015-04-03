@@ -68,7 +68,7 @@ class Fx {
             return false;
         }
 
-        return ($this->getB() - $f->getB()) / ($this->getA() - $f->getA());
+        return ($this->getB() - $f->getB()) / ($f->getA() - $this->getA());
     }
 }
 
@@ -248,17 +248,17 @@ class Map {
      * @return bool|Fx f(x) or false if perpendicular is vertical
      */
     protected function _getFx($x1, $y1, $x2, $y2) {
-        $moveY = $y2 - $y1;
+        $moveX = $x2 - $x1;
 
-        //If horizontal move, split vertically. No f(x) possible.
-        if (0 === $moveY) {
+        //If vertical move, split horizontally. No f(x) possible.
+        if (0 === $moveX) {
             return false;
         }
 
-        $moveX = $x2 - $x1;
+        $moveY = $y2 - $y1;
 
         //look for f(x) = ax + b
-        $a = -$moveY / $moveX;
+        $a = $moveY / $moveX;
         $b = $y1 - ($a * $x1);
 
         return $this->_generateFx($a, $b);
