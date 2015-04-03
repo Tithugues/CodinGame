@@ -120,14 +120,18 @@ class Map {
         $minX = min($xKeys);
         $maxX = max($xKeys);
 
+        //Get middle points of these columns => this is the median.
         $medianeYForMinX = ($this->_map[$minX]['min'] + $this->_map[$minX]['max']) / 2;
         $medianeYForMaxX = ($this->_map[$maxX]['min'] + $this->_map[$maxX]['max']) / 2;
 
-        //Get f(x) for the mediane.
+        //Get f(x) for the median.
         $fMediane = $this->_getFx($minX, $medianeYForMinX, $maxX, $medianeYForMaxX);
 
-        //If mediane is vertical...
+        //If median is vertical...
         if (false === $fMediane) {
+            _d('Vertical median');
+            
+
             $medianeX = round(($minX + $maxX) / 2);
             $x = $medianeX + ($medianeX - $this->_currentX);
             $y = $this->_currentY;
@@ -146,6 +150,7 @@ class Map {
 
         //If mediane is horizontal, perpendicular should be vertical.
         if (false === $fPerpendicular) {
+            _d('Vertical perpendicular');
             $x = $this->_currentX;
 
             $medianeY = round(($medianeYForMinX + $medianeYForMaxX) / 2);
