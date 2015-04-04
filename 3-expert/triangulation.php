@@ -115,10 +115,21 @@ class Map {
         _d($this->_currentX);
         _d($this->_currentY);
 
-        //Get farest columns.
         $xKeys = array_keys($this->_map);
-        $corners = array();
         $minX = min($xKeys);
+        if (1 === count($this->_map) && $this->_map[$minX]['min'] === $this->_map[$minX]['max']) {
+            $x = $minX;
+            $y = $this->_map[$minX]['min'];
+
+            if (true === $move) {
+                $this->move($x, $y);
+            }
+
+            return array($x, $y);
+        }
+
+        //Get farest columns.
+        $corners = array();
         $minYForMinX = $this->_map[$minX]['min'];
         $maxYForMinX = $this->_map[$minX]['max'];
         $corners[] = array($minX, $minYForMinX);
@@ -133,44 +144,39 @@ class Map {
         $closestCornerDist = null;
         $closestCornerX = null;
         $closestCornerY = null;
-        $closestCornerId = null;
+        //Find farest corner.
+        $farestCornerDist = null;
+        $farestCornerX = null;
+        $farestCornerY = null;
         foreach ($corners as $cornerId => $corner/*list($cornerX, $cornerY)*/) {
             list($cornerX, $cornerY) = $corner;
             $dist = $this->_getDist($this->_currentX, $this->_currentY, $cornerX, $cornerY);
             _d('Corner ' . $cornerId . ': ' . $dist);
             if (null === $closestCornerDist || $dist < $closestCornerDist) {
+                _d('closest');
                 $closestCornerDist = $dist;
                 $closestCornerX = $cornerX;
                 $closestCornerY = $cornerY;
-                $closestCornerId = $cornerId;
-                continue;
+            }
+            if (null === $farestCornerDist || $farestCornerDist <= $dist) {
+                _d('farest');
+                $farestCornerDist = $dist;
+                $farestCornerX = $cornerX;
+                $farestCornerY = $cornerY;
             }
         }
 
-        _d('closestCornerId: ');
-        _d($closestCornerId);
+        _d('closestCorner: ' . $closestCornerX . ' ' . $closestCornerY);
+        _d('farestCorner: ' . $farestCornerX . ' ' . $farestCornerY);
 
-        if (0 === $closestCornerId) {
-            $oppositeCornerX = $maxX;
-            $oppositeCornerY = $maxYForMaxX;
-        } elseif (1 === $closestCornerId) {
-            $oppositeCornerX = $maxX;
-            $oppositeCornerY = $minYForMaxX;
-        } elseif (2 === $closestCornerId) {
-            $oppositeCornerX = $minX;
-            $oppositeCornerY = $maxYForMinX;
-        } elseif (3 === $closestCornerId) {
-            $oppositeCornerX = $minX;
-            $oppositeCornerY = $minYForMinX;
-        }
+        $fMedian = $this->_getFx($closestCornerX, $closestCornerY, $farestCornerX, $farestCornerY);
+        _d($fMedian);
 
-        $fMedian = $this->_getFx($closestCornerX, $closestCornerY, $oppositeCornerX, $oppositeCornerY);
-
-        $x = $oppositeCornerX - ($this->_currentX - $closestCornerX);
 
         //If median is vertical...
         if (false === $fMedian) {
-            $y = $closestCornerY;
+            $x = $closestCornerX;
+            $y = $this->_limitY($farestCornerY - ($this->_currentY - $closestCornerY));
 
             if (true === $move) {
                 $this->move($x, $y);
@@ -179,7 +185,10 @@ class Map {
             return array($x, $y);
         }
 
+        $x = $this->_limitX($farestCornerX - ($this->_currentX - $closestCornerX));
         $y = round($fMedian->getY($x));
+        _d($y);
+        $y = $this->_limitY($y);
         _d($x);
         _d($y);
 
@@ -241,13 +250,19 @@ class Map {
         return array($x, $y);
     }
 
+    protected function _limitX($x) {
+        return min($this->_width - 1, max(0, $x));
+    }
+
+    protected function _limitY($y) {
+        return min($this->_height - 1, max(0, $y));
+    }
+
     protected function _isInMap($x, $y) {
         return 0 <= $x && $x < $this->_width && 0 <= $y && $y < $this->_height;
     }
 
     protected function _getDist($x1, $y1, $x2, $y2) {
-        _d('x2 - x1 = ' . $x2 . ' - ' . $x1 . ' = ' . $x2 - $x1);
-        _d('y2 - y1 = ' . $y2 . ' - ' . $y1 . ' = ' . $y2 - $y1);
         _d('a²: ' . pow($x2 - $x1, 2));
         _d('b²: ' . pow($y2 - $y1, 2));
         return sqrt(pow($x2 - $x1, 2) + pow($y2 - $y1, 2));
@@ -289,9 +304,8 @@ class Map {
             return;
         }
 
-        /*_d('$a: ' . $f->getA());
-        _d('$b: ' . $f->getB());
-        _d('$f(2): ' . $f->getY(2));*/
+        _d($f);
+        //_d('$f(2): ' . $f->getY(2));
 
         if ('SAME' === $far) {
             $toRemove = self::NOT_LIMIT;
@@ -396,19 +410,16 @@ class Map {
      * @param int $toRemove Direction to remove
      */
     protected function _eraseData($f, $toRemove) {
+        _d($toRemove);
         for ($x = $this->_width - 1; 0 <= $x; --$x) {
             if (!isset($this->_map[$x])) {
                 continue;
             }
 
-            //$mapX =& $this->_map[$x];
-
             $limitY = $f->getY($x);
             //_d('$f(' . $x . ') = ' . $limitY);
             if (self::UP === $toRemove) {
-                /*for ($y = max(array_keys($this->_map[$x])); $limitY <= $y; --$y) {
-                    unset($this->_map[$x][$y]);
-                }*/
+                $limitY = ceil($limitY-1);
                 if ($this->_map[$x]['max'] <= $limitY) {
                     continue;
                 }
@@ -416,11 +427,9 @@ class Map {
                     unset($this->_map[$x]);
                     continue;
                 }
-                $this->_map[$x]['max'] = floor($limitY);
+                $this->_map[$x]['max'] = $limitY;
             } elseif (self::DOWN === $toRemove) {
-                /*for ($y = min(array_keys($this->_map[$x])); $y <= $limitY; ++$y) {
-                    unset($this->_map[$x][$y]);
-                }*/
+                $limitY = floor($limitY+1);
                 if ($limitY <= $this->_map[$x]['min']) {
                     continue;
                 }
@@ -428,7 +437,7 @@ class Map {
                     unset($this->_map[$x]);
                     continue;
                 }
-                $this->_map[$x]['min'] = ceil($limitY);
+                $this->_map[$x]['min'] = $limitY;
             } elseif (self::NOT_LIMIT === $toRemove) {
                 //If $x $limitY has already been deleted, remove the whole column.
                 //if (!isset($this->_map[$x][$limitY])) {
@@ -519,7 +528,7 @@ while (TRUE) {
 
     $map->cleanCells($BOMB_DIST);
 
-    _d($map->getMap());
+    //_d($map->getMap());
 
     list($X0, $Y0) = $map->getNewCoordinates();
 
