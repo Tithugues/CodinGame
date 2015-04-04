@@ -1,6 +1,6 @@
 <?php
 
-define('DEBUG', false);
+define('DEBUG', true);
 
 function _d($var, $force = false) {
     if (DEBUG || $force) {
@@ -117,24 +117,84 @@ class Map {
 
         //Get farest columns.
         $xKeys = array_keys($this->_map);
+        $corners = array();
         $minX = min($xKeys);
+        $minYForMinX = $this->_map[$minX]['min'];
+        $maxYForMinX = $this->_map[$minX]['max'];
+        $corners[] = array($minX, $minYForMinX);
+        $corners[] = array($minX, $maxYForMinX);
         $maxX = max($xKeys);
+        $minYForMaxX = $this->_map[$maxX]['min'];
+        $maxYForMaxX = $this->_map[$maxX]['max'];
+        $corners[] = array($maxX, $minYForMaxX);
+        $corners[] = array($maxX, $maxYForMaxX);
 
-        //Get middle points of these columns => this is the median.
-        $medianeYForMinX = ($this->_map[$minX]['min'] + $this->_map[$minX]['max']) / 2;
-        $medianeYForMaxX = ($this->_map[$maxX]['min'] + $this->_map[$maxX]['max']) / 2;
+        //Find closest corner.
+        $closestCornerDist = null;
+        $closestCornerX = null;
+        $closestCornerY = null;
+        $closestCornerId = null;
+        foreach ($corners as $cornerId => $corner/*list($cornerX, $cornerY)*/) {
+            list($cornerX, $cornerY) = $corner;
+            $dist = $this->_getDist($this->_currentX, $this->_currentY, $cornerX, $cornerY);
+            _d('Corner ' . $cornerId . ': ' . $dist);
+            if (null === $closestCornerDist || $dist < $closestCornerDist) {
+                $closestCornerDist = $dist;
+                $closestCornerX = $cornerX;
+                $closestCornerY = $cornerY;
+                $closestCornerId = $cornerId;
+                continue;
+            }
+        }
 
-        //Get f(x) for the median.
-        $fMediane = $this->_getFx($minX, $medianeYForMinX, $maxX, $medianeYForMaxX);
+        _d('closestCornerId: ');
+        _d($closestCornerId);
 
-        //If median is vertical...
-        if (false === $fMediane) {
-            _d('Vertical median');
-            
+        if (0 === $closestCornerId) {
+            $oppositeCornerX = $maxX;
+            $oppositeCornerY = $maxYForMaxX;
+        } elseif (1 === $closestCornerId) {
+            $oppositeCornerX = $maxX;
+            $oppositeCornerY = $minYForMaxX;
+        } elseif (2 === $closestCornerId) {
+            $oppositeCornerX = $minX;
+            $oppositeCornerY = $maxYForMinX;
+        } elseif (3 === $closestCornerId) {
+            $oppositeCornerX = $minX;
+            $oppositeCornerY = $minYForMinX;
+        }
 
-            $medianeX = round(($minX + $maxX) / 2);
-            $x = $medianeX + ($medianeX - $this->_currentX);
-            $y = $this->_currentY;
+        $x = $oppositeCornerX - ($this->_currentX - $closestCornerX);
+        $y = $oppositeCornerY - ($this->_currentY - $closestCornerY);
+        _d($x);
+        _d($y);
+
+        if ($this->_isInMap($x, $y)) {
+            _d('isInMap');
+            if (true === $move) {
+                $this->move($x, $y);
+            }
+
+            return array($x, $y);
+        }
+
+        _d('is not in map');
+
+        //If out of map, find new point...
+        $fx = $this->_getFx($this->_currentX, $this->_currentY, $x, $y);
+
+        //If f(x) vertical, stop on border
+        if (false === $fx) {
+            if ($y < 0) {
+                $y = 0;
+            } else {
+                $y = $this->_height - 1;
+            }
+            if ($x < 0) {
+                $x = 0;
+            } else {
+                $x = $this->_width - 1;
+            }
 
             if (true === $move) {
                 $this->move($x, $y);
@@ -143,37 +203,40 @@ class Map {
             return array($x, $y);
         }
 
-        //Get f(x) perpendicular to this mediane, going through current position. Generate new X Y.
-        $fPerpendicular = $this->_getFPerpendicular(
-            $minX, $medianeYForMinX, $maxX, $medianeYForMaxX, $this->_currentX, $this->_currentY
-        );
-
-        //If mediane is horizontal, perpendicular should be vertical.
-        if (false === $fPerpendicular) {
-            _d('Vertical perpendicular');
-            $x = $this->_currentX;
-
-            $medianeY = round(($medianeYForMinX + $medianeYForMaxX) / 2);
-            $y = $medianeY + ($medianeY - $this->_currentY);
-
-            if (true === $move) {
-                $this->move($x, $y);
-            }
-
-            return array($x, $y);
+        if ($x < 0) {
+            $x = 0;
+            $y = round($fx->getY($x));
+        } elseif ($this->_width <= $x) {
+            $x = $this->_width - 1;
+            $y = round($fx->getY($x));
         }
 
-        //Find place of new point. We know current point. We should go the point
-        $crossX = $fMediane->getCrossingX($fPerpendicular);
-
-        $x = round($crossX + ($crossX - $this->_currentX));
-        $y = round($fPerpendicular->getY($x));
+        if ($y < 0) {
+            _d($fx);
+            $y = 0;
+            $x = round($fx->getXFromY($y));
+        } elseif ($this->_height <= $y) {
+            $y = $this->_height - 1;
+            $x = round($fx->getXFromY($y));
+        }
 
         if (true === $move) {
             $this->move($x, $y);
         }
 
         return array($x, $y);
+    }
+
+    protected function _isInMap($x, $y) {
+        return 0 <= $x && $x < $this->_width && 0 <= $y && $y < $this->_height;
+    }
+
+    protected function _getDist($x1, $y1, $x2, $y2) {
+        _d('x2 - x1 = ' . $x2 . ' - ' . $x1 . ' = ' . $x2 - $x1);
+        _d('y2 - y1 = ' . $y2 . ' - ' . $y1 . ' = ' . $y2 - $y1);
+        _d('a²: ' . pow($x2 - $x1, 2));
+        _d('b²: ' . pow($y2 - $y1, 2));
+        return sqrt(pow($x2 - $x1, 2) + pow($y2 - $y1, 2));
     }
 
     public function move($x, $y) {
@@ -212,9 +275,9 @@ class Map {
             return;
         }
 
-        _d('$a: ' . $f->getA());
+        /*_d('$a: ' . $f->getA());
         _d('$b: ' . $f->getB());
-        _d('$f(2): ' . $f->getY(2));
+        _d('$f(2): ' . $f->getY(2));*/
 
         if ('SAME' === $far) {
             $toRemove = self::NOT_LIMIT;
@@ -327,7 +390,7 @@ class Map {
             //$mapX =& $this->_map[$x];
 
             $limitY = $f->getY($x);
-            _d('$f(' . $x . ') = ' . $limitY);
+            //_d('$f(' . $x . ') = ' . $limitY);
             if (self::UP === $toRemove) {
                 /*for ($y = max(array_keys($this->_map[$x])); $limitY <= $y; --$y) {
                     unset($this->_map[$x][$y]);
