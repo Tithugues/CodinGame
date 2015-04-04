@@ -164,8 +164,22 @@ class Map {
             $oppositeCornerY = $minYForMinX;
         }
 
+        $fMedian = $this->_getFx($closestCornerX, $closestCornerY, $oppositeCornerX, $oppositeCornerY);
+
         $x = $oppositeCornerX - ($this->_currentX - $closestCornerX);
-        $y = $oppositeCornerY - ($this->_currentY - $closestCornerY);
+
+        //If median is vertical...
+        if (false === $fMedian) {
+            $y = $closestCornerY;
+
+            if (true === $move) {
+                $this->move($x, $y);
+            }
+
+            return array($x, $y);
+        }
+
+        $y = round($fMedian->getY($x));
         _d($x);
         _d($y);
 
