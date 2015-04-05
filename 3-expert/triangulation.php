@@ -185,10 +185,39 @@ class Map {
             return array($x, $y);
         }
 
-        $x = $this->_limitX($farestCornerX - ($this->_currentX - $closestCornerX));
-        $y = round($fMedian->getY($x));
-        _d($y);
-        $y = $this->_limitY($y);
+        if (0 == $fMedian->getA()) {
+            $x = $this->_limitX($farestCornerX - ($this->_currentX - $closestCornerX));
+            $y = $this->_limitY(round($fMedian->getY($x)));
+
+            if (true === $move) {
+                $this->move($x, $y);
+            }
+
+            return array($x, $y);
+        }
+
+        //$x = $this->_limitX($farestCornerX - ($this->_currentX - $closestCornerX));
+        $fPerp = $this->_getFPerpendicular($closestCornerX, $closestCornerY, $farestCornerX, $farestCornerY, $this->_currentX, $this->_currentY);
+        $crossingX = $fMedian->getCrossingX($fPerp);
+        $crossingX2 = $farestCornerX - ($crossingX - $closestCornerX);
+        $fPerp2 = $this->_getFxFromA($fPerp->getA(), $crossingX2, $fMedian->getY($crossingX2));
+
+        $fMove = $this->_getFxFromA($fMedian->getA(), $this->_currentX, $this->_currentY);
+
+        $crossingX3 = $fMove->getCrossingX($fPerp2);
+        $fLimit = $this->_getFx($crossingX3, $fPerp2->getY($crossingX3), $farestCornerX, $farestCornerY);
+
+        $x = round($crossingX3);
+        $step = ($x < $farestCornerX ? 1 : -1);
+
+        do {
+
+            //$fSeparation = $this->_getFSeparation($closestCornerX, $closestCornerY, $farestCornerX, $farestCornerY);
+
+
+            $y = round($fLimit->getY($x));
+
+        } while (!$this->_isInMap($x, $y) && $x += $step);
         _d($x);
         _d($y);
 
@@ -351,6 +380,12 @@ class Map {
         //look for f(x) = ax + b
         $a = $moveY / $moveX;
         $b = $y1 - ($a * $x1);
+
+        return $this->_generateFx($a, $b);
+    }
+
+    protected function _getFxFromA($a, $x, $y) {
+        $b = $y - ($a * $x);
 
         return $this->_generateFx($a, $b);
     }
