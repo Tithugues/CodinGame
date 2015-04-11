@@ -1,6 +1,6 @@
 <?php
 
-define('DEBUG', false);
+define('DEBUG', true);
 
 function _d($var, $force = false) {
     if (DEBUG || $force) {
@@ -72,6 +72,30 @@ class Fx {
     }
 }
 
+class Barycentre {
+    protected $_x = null;
+    protected $_y = null;
+    protected $_weight = null;
+
+    public function __construct($x, $y, $weight) {
+        $this->_x = $x;
+        $this->_y = $y;
+        $this->_weight = $weight;
+    }
+
+    public function getX() {
+        return $this->_x;
+    }
+
+    public function getY() {
+        return $this->_y;
+    }
+
+    public function getWeight() {
+        return $this->_weight;
+    }
+}
+
 class Map {
     const UP = 0;
     const DOWN = 1;
@@ -115,65 +139,61 @@ class Map {
         _d($this->_currentX);
         _d($this->_currentY);
 
-        //Get farest columns.
+        //If last window, jump!
         $xKeys = array_keys($this->_map);
         $minX = min($xKeys);
-        $maxX = max($xKeys);
-
-        //Get middle points of these columns => this is the median.
-        $medianeYForMinX = ($this->_map[$minX]['min'] + $this->_map[$minX]['max']) / 2;
-        $medianeYForMaxX = ($this->_map[$maxX]['min'] + $this->_map[$maxX]['max']) / 2;
-
-        //Get f(x) for the median.
-        $fMediane = $this->_getFx($minX, $medianeYForMinX, $maxX, $medianeYForMaxX);
-
-        //If median is vertical...
-        if (false === $fMediane) {
-            _d('Vertical median');
-            
-
-            $medianeX = round(($minX + $maxX) / 2);
-            $x = $medianeX + ($medianeX - $this->_currentX);
-            $y = $this->_currentY;
-
+        if (1 === count($this->_map) && $this->_map[$minX]['min'] === $this->_map[$minX]['max']) {
+            $x = $minX;
+            $y = $this->_map[$minX]['min'];
             if (true === $move) {
                 $this->move($x, $y);
             }
-
             return array($x, $y);
         }
 
-        //Get f(x) perpendicular to this mediane, going through current position. Generate new X Y.
-        $fPerpendicular = $this->_getFPerpendicular(
-            $minX, $medianeYForMinX, $maxX, $medianeYForMaxX, $this->_currentX, $this->_currentY
-        );
+        //Find barycenter of remaining windows.
+        $barycentres = array();
 
-        //If mediane is horizontal, perpendicular should be vertical.
-        if (false === $fPerpendicular) {
-            _d('Vertical perpendicular');
-            $x = $this->_currentX;
-
-            $medianeY = round(($medianeYForMinX + $medianeYForMaxX) / 2);
-            $y = $medianeY + ($medianeY - $this->_currentY);
-
-            if (true === $move) {
-                $this->move($x, $y);
-            }
-
-            return array($x, $y);
+        foreach ($this->_map as $x => $rows) {
+            $b = new Barycentre(
+                $x, 
+                ($rows['max'] + $rows['min']) / 2, 
+                $rows['max'] + $rows['min'] + 1
+            );
+            //_d($b);
+            $barycentres[] = $b;
+            unset($b);
         }
 
-        //Find place of new point. We know current point. We should go the point
-        $crossX = $fMediane->getCrossingX($fPerpendicular);
+        $sumX = 0;
+        $sumY = 0;
+        $sumWeights = 0;
+        foreach ($barycentres as $barycentre) {
+            $sumX += $barycentre->getWeight() * $barycentre->getX();
+            $sumY += $barycentre->getWeight() * $barycentre->getY();
+            $sumWeights += $barycentre->getWeight();
+        }
+        unset($barycentres);
 
-        $x = round($crossX + ($crossX - $this->_currentX));
-        $y = round($fPerpendicular->getY($x));
+        $barycentreX = $sumX / $sumWeights;
+        $barycentreY = $sumY / $sumWeights;
+
+        _d('Barycentre: ' . $barycentreX . ' ' . $barycentreY);
+
+        $x = $this->_limitX(round($barycentreX - ($this->_currentX - $barycentreX)));
+        $y = $this->_limitY(round($barycentreY - ($this->_currentY - $barycentreY)));
 
         if (true === $move) {
             $this->move($x, $y);
         }
 
         return array($x, $y);
+    }
+    protected function _limitX($x) {
+        return min($this->_width - 1, max(0, $x));
+    }
+    protected function _limitY($y) {
+        return min($this->_height - 1, max(0, $y));
     }
 
     public function move($x, $y) {
@@ -192,6 +212,7 @@ class Map {
         }
 
         $f = $this->_getFSeparation($this->_previousX, $this->_previousY, $this->_currentX, $this->_currentY);
+        _d($f);
 
         //We know that the movement is from X cases and Y cases.
         //Let's find the limit line between these 2 places.
@@ -211,10 +232,6 @@ class Map {
             $this->_eraseDataHorizontalMove($mediane, $toRemove);
             return;
         }
-
-        _d('$a: ' . $f->getA());
-        _d('$b: ' . $f->getB());
-        _d('$f(2): ' . $f->getY(2));
 
         if ('SAME' === $far) {
             $toRemove = self::NOT_LIMIT;
@@ -324,14 +341,9 @@ class Map {
                 continue;
             }
 
-            //$mapX =& $this->_map[$x];
-
             $limitY = $f->getY($x);
-            _d('$f(' . $x . ') = ' . $limitY);
             if (self::UP === $toRemove) {
-                /*for ($y = max(array_keys($this->_map[$x])); $limitY <= $y; --$y) {
-                    unset($this->_map[$x][$y]);
-                }*/
+                $limitY = ceil($limitY-1);
                 if ($this->_map[$x]['max'] <= $limitY) {
                     continue;
                 }
@@ -339,11 +351,9 @@ class Map {
                     unset($this->_map[$x]);
                     continue;
                 }
-                $this->_map[$x]['max'] = floor($limitY);
+                $this->_map[$x]['max'] = $limitY;
             } elseif (self::DOWN === $toRemove) {
-                /*for ($y = min(array_keys($this->_map[$x])); $y <= $limitY; ++$y) {
-                    unset($this->_map[$x][$y]);
-                }*/
+                $limitY = floor($limitY+1);
                 if ($limitY <= $this->_map[$x]['min']) {
                     continue;
                 }
@@ -351,7 +361,7 @@ class Map {
                     unset($this->_map[$x]);
                     continue;
                 }
-                $this->_map[$x]['min'] = ceil($limitY);
+                $this->_map[$x]['min'] = $limitY;
             } elseif (self::NOT_LIMIT === $toRemove) {
                 //If $x $limitY has already been deleted, remove the whole column.
                 //if (!isset($this->_map[$x][$limitY])) {
@@ -378,6 +388,8 @@ class Map {
     }
 
     protected function _eraseDataHorizontalMove($limitX, $toRemove) {
+        _d($limitX);
+        _d($toRemove);
         if (self::RIGHT === $toRemove) {
             for ($x = max(array_keys($this->_map)); $limitX <= $x; --$x) {
                 unset($this->_map[$x]);
@@ -389,7 +401,7 @@ class Map {
         } elseif (self::NOT_LIMIT === $toRemove) {
             for ($x = $this->_width - 1; 0 <= $x; --$x) {
                 //Don't remove column if limit.
-                if ($x === $limitX) {
+                if ($x == $limitX) {
                     continue;
                 }
 
@@ -430,6 +442,8 @@ class Map {
 // width of the building.
 // height of the building.
 fscanf(STDIN, "%d %d", $W, $H);
+_d('W: ' . $W);
+_d('H: ' . $H);
 fscanf(STDIN, "%d", $N); // maximum number of turns before game over.
 fscanf(STDIN, "%d %d", $X0, $Y0);
 
