@@ -6,9 +6,9 @@
 define('DEBUG', false);
 
 function _d($var, $force = false) {
-    if (DEBUG || $force) {
+    /*if (DEBUG || $force) {
         error_log(var_export($var, true));
-    }
+    }*/
 }
 
 fscanf(STDIN, "%d", $width); // the number of cells on the X axis
@@ -18,6 +18,9 @@ for ($i = 0; $i < $height; $i++) {
     $lines[] = stream_get_line(STDIN, 31, "\n"); // width characters, each either a number or a '.'
 }
 
+/**
+ * Class Map
+ */
 class Map {
     /** @var string[] Map lines */
     public $map = array();
@@ -43,7 +46,7 @@ class Map {
     }
 
     public function initNodes() {
-        $networkId = 1;
+        $networkId = 0;
         for ($rowId = 0; $rowId < $this->height; ++$rowId) {
             for ($colId = 0; $colId < $this->width; ++$colId) {
                 if ('.' === $this->map[$rowId]{$colId}) {
@@ -51,68 +54,9 @@ class Map {
                 }
 
                 $this->nodes[$rowId][$colId] = (int)$this->map[$rowId]{$colId};
-                $this->nodesNetwork[$rowId][$colId] = $networkId++;
+                $this->nodesNetwork[$rowId][$colId] = ++$networkId;
             }
         }
-        /*_d('Networks:');
-        _d($this->nodesNetwork);*/
-    }
-
-    public function parse() {
-        while (true) {
-            _d('New parse!', true);
-            $nbAddedLinks = 0;
-            foreach ($this->nodes as $rowId => $row) {
-                foreach ($row as $colId => $nbFreeNodes) {
-                    if (0 === $nbFreeNodes) {
-                        continue;
-                    }
-
-                    $nbAddedLinks += $this->linkNode($rowId, $colId);
-                }
-            }
-            _d($this->nodes);
-
-            if (0 === $nbAddedLinks) {
-                //If there still are some nodes with links to add...
-                if ($this->existsNonFilledNodes()) {
-                    _d('Exists non filled nodes.', true);
-                    return $this->assume();
-                }
-                _d('All nodes filled.');
-
-                return $this;
-            }
-        }
-    }
-
-    public function assume() {
-        do {
-            //Find node with remaining free links...
-            foreach ($this->nodes as $colId => $cols) {
-                foreach ($cols as $rowId => $nbRemainingLinks) {
-                    if (0 === $nbRemainingLinks) {
-                        continue;
-                    }
-
-                    break 2;
-                }
-            }
-
-            if (isset($node)) {
-                _d('block ' . $colId. ' ' . $rowId . ' -> ' . $node[1] . ' ' . $node[0], true);
-                $this->blockLink($rowId, $colId, $node[0], $node[1]);
-            }
-            $clone = clone($this);
-            if (false === ($node = $clone->getNodeWithRemainingLinks($rowId, $colId))) {
-                return false;
-            }
-            _d('assume ' . $colId. ' ' . $rowId . ' -> ' . $node[1] . ' ' . $node[0], true);
-            $clone->addLink($rowId, $colId, $node[0], $node[1]);
-            _d($clone->nodes);
-        } while (false === ($r = $clone->parse()));
-
-        return false === $r->isOnOneNetwork() ? false : $r;
     }
 
     /**
@@ -130,21 +74,41 @@ class Map {
     }
 
     /**
-     * Display all the links
-     * @return void
+     * Check if a network not linked to some nodes doesn't have more free remaining links.
+     *
+     * @return bool
      */
-    public function displayResult() {
-        /*_d('Networks:');
-        _d($this->nodesNetwork);*/
-        foreach ($this->links as $rowId1 => $cols) {
-            foreach ($cols as $colId1 => $children) {
-                foreach ($children as $rowId2 => $colsChildren) {
-                    foreach ($colsChildren as $colId2 => $nbLinks) {
-                        echo $colId1 . ' ' . $rowId1 . ' ' . $colId2 . ' ' . $rowId2 . ' ' . $nbLinks['set'] . "\n";
-                    }
+    public function hasAClosedSubNetwork() {
+        /** @var array $networks Contain all networks and its state: networkId => open */
+        $openNetworks = array();
+
+        foreach ($this->nodes as $rowId => $cols) {
+            foreach ($cols as $colId => $remainingFreeLinks) {
+                $networkId = $this->nodesNetwork[$rowId][$colId];
+                if (!array_key_exists($networkId, $openNetworks)) {
+                    $openNetworks[$networkId] = false;
+                }
+                if (0 !== $remainingFreeLinks) {
+                    $openNetworks[$networkId] = true;
                 }
             }
         }
+
+        //Only one network? So no sub-network.
+        if (1 === count($openNetworks)) {
+            return false;
+        }
+
+        //Loop only for trace.
+        foreach ($openNetworks as $networkId => $open) {
+            if (false === $open) {
+                _d($networkId, true);
+                //_d($this->nodesNetwork, true);
+                break;
+            }
+        }
+
+        return in_array(false, $openNetworks);
     }
 
     /**
@@ -161,104 +125,6 @@ class Map {
         }
 
         return false;
-    }
-
-    /**
-     * Try to link a node to its neighbors
-     * @param int $rowId
-     * @param int $colId
-     * @return int|bool Number of added links or false if not a node
-     */
-    public function linkNode($rowId, $colId) {
-        $remainingLinks = $this->getRemainingFreeLinks($rowId, $colId);
-        if (false === $remainingLinks || 0 === $remainingLinks) {
-            return $remainingLinks;
-        }
-
-        $neighborRemainingFreeLinks = 0;
-
-        _d('Node to link: ' . $colId . ' ' . $rowId);
-
-        $rightNode = $this->findRightNode($rowId, $colId);
-        $rightRemainingFreeLinks = 0;
-        if (false !== $rightNode) {
-            $rightRemainingFreeLinks = $this->countRemainingFreeLinksBetweenNodes($rowId, $colId, $rightNode[0], $rightNode[1]);
-            $neighborRemainingFreeLinks += $rightRemainingFreeLinks;
-        }
-        _d($rightNode);
-        _d($rightRemainingFreeLinks);
-
-        $bottomNode = $this->findBottomNode($rowId, $colId);
-        $bottomRemainingFreeLinks = 0;
-        if (false !== $bottomNode) {
-            $bottomRemainingFreeLinks = $this->countRemainingFreeLinksBetweenNodes($rowId, $colId, $bottomNode[0], $bottomNode[1]);
-            $neighborRemainingFreeLinks += $bottomRemainingFreeLinks;
-        }
-        _d($bottomNode);
-        _d($bottomRemainingFreeLinks);
-
-        $leftNode = $this->findLeftNode($rowId, $colId);
-        $leftRemainingFreeLinks = 0;
-        if (false !== $leftNode) {
-            $leftRemainingFreeLinks = $this->countRemainingFreeLinksBetweenNodes($rowId, $colId, $leftNode[0], $leftNode[1]);
-            $neighborRemainingFreeLinks += $leftRemainingFreeLinks;
-        }
-        _d($leftNode);
-        _d($leftRemainingFreeLinks);
-
-        $topNode = $this->findTopNode($rowId, $colId);
-        $topRemainingFreeLinks = 0;
-        if (false !== $topNode) {
-            $topRemainingFreeLinks = $this->countRemainingFreeLinksBetweenNodes($rowId, $colId, $topNode[0], $topNode[1]);
-            $neighborRemainingFreeLinks += $topRemainingFreeLinks;
-        }
-        _d($topNode);
-        _d($topRemainingFreeLinks);
-
-        _d('$remainingLinks: ' . $remainingLinks);
-        _d('$neighborRemainingFreeLinks: ' . $neighborRemainingFreeLinks);
-
-        $nbOfLinksNotToAdd = $neighborRemainingFreeLinks - $remainingLinks;
-        if ($nbOfLinksNotToAdd >= 2) {
-            return 0;
-        }
-
-        $nbAddedLinks = 0;
-        if (0 !== $rightRemainingFreeLinks) {
-            for ($i = $rightRemainingFreeLinks - $nbOfLinksNotToAdd; $i > 0; --$i) {
-                _d('Add link with right');
-                $this->addLink($rowId, $colId, $rightNode[0], $rightNode[1]);
-                $nbAddedLinks++;
-            }
-        }
-
-        if (0 !== $bottomRemainingFreeLinks) {
-            for ($i = $bottomRemainingFreeLinks - $nbOfLinksNotToAdd; $i > 0; --$i) {
-                _d('Add link with bottom');
-                $this->addLink($rowId, $colId, $bottomNode[0], $bottomNode[1]);
-                $nbAddedLinks++;
-            }
-        }
-
-        if (0 !== $leftRemainingFreeLinks) {
-            for ($i = $leftRemainingFreeLinks - $nbOfLinksNotToAdd; $i > 0; --$i) {
-                _d('Add link with left');
-                $this->addLink($rowId, $colId, $leftNode[0], $leftNode[1]);
-                $nbAddedLinks++;
-            }
-        }
-
-        if (0 !== $topRemainingFreeLinks) {
-            for ($i = $topRemainingFreeLinks - $nbOfLinksNotToAdd; $i > 0; --$i) {
-                _d('Add link with top');
-                $this->addLink($rowId, $colId, $topNode[0], $topNode[1]);
-                $nbAddedLinks++;
-            }
-        }
-
-        //_d($this->casesCrossed);
-
-        return $nbAddedLinks;
     }
 
     /**
@@ -283,19 +149,29 @@ class Map {
 
         $this->nodes[$rowId1][$colId1]--;
         $this->nodes[$rowId2][$colId2]--;
-        //_d('Old network 1: ' . $rowId1 . '-' . $colId1 . ' = ' . $this->nodesNetwork[$rowId1][$colId1]);
-        //_d('Old network 2: ' . $rowId2 . '-' . $colId2 . ' = ' . $this->nodesNetwork[$rowId2][$colId2]);
-        if ($this->nodesNetwork[$rowId1][$colId1] < $this->nodesNetwork[$rowId2][$colId2]) {
-            $this->nodesNetwork[$rowId2][$colId2] =& $this->nodesNetwork[$rowId1][$colId1];
-        } else {
-            $this->nodesNetwork[$rowId1][$colId1] =& $this->nodesNetwork[$rowId2][$colId2];
-        }
-        //_d('New network 1: ' . $this->nodesNetwork[$rowId1][$colId1]);
-        //_d('New network 2: ' . $this->nodesNetwork[$rowId2][$colId2]);
 
+        $this->updateNetwork($this->nodesNetwork[$rowId1][$colId1], $this->nodesNetwork[$rowId2][$colId2]);
         $this->crossCases($rowId1, $colId1, $rowId2, $colId2);
 
         return $r;
+    }
+
+    /**
+     * @param int $oldNetworkId
+     * @param int $newNetworkId
+     *
+     * @return void
+     */
+    protected function updateNetwork($oldNetworkId, $newNetworkId) {
+        foreach ($this->nodesNetwork as $rowId => $cols) {
+            foreach ($cols as $colId => $networkId) {
+                if ($oldNetworkId !== $networkId) {
+                    continue;
+                }
+
+                $this->nodesNetwork[$rowId][$colId] = $newNetworkId;
+            }
+        }
     }
 
     /**
@@ -321,6 +197,16 @@ class Map {
         return $r;
     }
 
+    /**
+     * Register crosses cases, so we won't be able to cross it in another way
+     *
+     * @param $rowId1
+     * @param $colId1
+     * @param $rowId2
+     * @param $colId2
+     *
+     * @return void
+     */
     public function crossCases($rowId1, $colId1, $rowId2, $colId2) {
         $way = ($rowId1 === $rowId2 ? 'H' : 'V');
         for ($rowId = min($rowId1, $rowId2), $rowIdEnd = max($rowId1, $rowId2); $rowId <= $rowIdEnd; ++$rowId) {
@@ -332,8 +218,10 @@ class Map {
 
     /**
      * Count remaining free links on this node.
+     *
      * @param int $rowId
      * @param int $colId
+     *
      * @return int|bool Number of free links or false if not a node
      */
     public function getRemainingFreeLinks($rowId, $colId) {
@@ -364,7 +252,6 @@ class Map {
             2 - $this->countSetLinksBetweenNodes(
                 $rowId1, $colId1, $rowId2, $colId2
             ) - $this->countForbiddenLinksBetweenNodes($rowId1, $colId1, $rowId2, $colId2),
-            //$this->getRemainingFreeLinks($rowId1, $colId1),
             $this->getRemainingFreeLinks($rowId2, $colId2)
         );
     }
@@ -408,16 +295,91 @@ class Map {
 
         return 0;
     }
+}
+
+/**
+ * Interface Renderer
+ */
+interface Renderer
+{
+    public function render();
+}
+
+/**
+ * Class MapRenderer
+ */
+class MapRenderer implements Renderer
+{
+    protected $map;
+
+    /**
+     * MapRenderer constructor.
+     *
+     * @param Map $map
+     */
+    public function __construct($map)
+    {
+        $this->map = $map;
+    }
+
+    /**
+     * Display all the links
+     * @return void
+     */
+    public function render() {
+        if (!($this->map instanceof Map)) {
+            return;
+        }
+
+        _d($this->map, true);
+        foreach ($this->map->links as $rowId1 => $cols) {
+            foreach ($cols as $colId1 => $children) {
+                foreach ($children as $rowId2 => $colsChildren) {
+                    foreach ($colsChildren as $colId2 => $nbLinks) {
+                        if (0 === $nbLinks['set']) {
+                            continue;
+                        }
+
+                        echo $colId1 . ' ' . $rowId1 . ' ' . $colId2 . ' ' . $rowId2 . ' ' . $nbLinks['set'] . "\n";
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Interface Parser
+ */
+interface Parser
+{
+    /**
+     * @param Map $map
+     *
+     * @return Map|bool Map filled or false if impossible
+     */
+    public function parse($map);
+}
+
+/**
+ * Class DummyParser
+ */
+class DummyParser implements Parser
+{
+    /**
+     * @var Map
+     */
+    protected $map;
 
     protected function findBottomNode($rowId, $colId) {
-        for ($i = $rowId + 1; $i < $this->height; ++$i) {
+        for ($i = $rowId + 1; $i < $this->map->height; ++$i) {
             //If node found, leave.
-            if ('.' !== $this->map[$i]{$colId}) {
+            if ('.' !== $this->map->map[$i]{$colId}) {
                 return array($i, $colId);
             }
 
             //Else, check if it is a crossed case
-            if (isset($this->casesCrossed[$i][$colId]) && 'H' === $this->casesCrossed[$i][$colId]) {
+            if (isset($this->map->casesCrossed[$i][$colId]) && 'H' === $this->map->casesCrossed[$i][$colId]) {
                 return false;
             }
         }
@@ -428,12 +390,12 @@ class Map {
     protected function findTopNode($rowId, $colId) {
         for ($i = $rowId - 1; $i >= 0; --$i) {
             //If node found, leave.
-            if ('.' !== $this->map[$i]{$colId}) {
+            if ('.' !== $this->map->map[$i]{$colId}) {
                 return array($i, $colId);
             }
 
             //Else, check if it is a crossed case
-            if (isset($this->casesCrossed[$i][$colId]) && 'H' === $this->casesCrossed[$i][$colId]) {
+            if (isset($this->map->casesCrossed[$i][$colId]) && 'H' === $this->map->casesCrossed[$i][$colId]) {
                 return false;
             }
         }
@@ -444,12 +406,12 @@ class Map {
     protected function findLeftNode($rowId, $colId) {
         for ($i = $colId - 1; $i >= 0; --$i) {
             //If node found, leave.
-            if ('.' !== $this->map[$rowId]{$i}) {
+            if ('.' !== $this->map->map[$rowId]{$i}) {
                 return array($rowId, $i);
             }
 
             //Else, check if it is a crossed case
-            if (isset($this->casesCrossed[$rowId][$i]) && 'V' === $this->casesCrossed[$rowId][$i]) {
+            if (isset($this->map->casesCrossed[$rowId][$i]) && 'V' === $this->map->casesCrossed[$rowId][$i]) {
                 return false;
             }
         }
@@ -458,14 +420,14 @@ class Map {
     }
 
     protected function findRightNode($rowId, $colId) {
-        for ($i = $colId + 1; $i < $this->width; ++$i) {
+        for ($i = $colId + 1; $i < $this->map->width; ++$i) {
             //If node found, leave.
-            if ('.' !== $this->map[$rowId]{$i}) {
+            if ('.' !== $this->map->map[$rowId]{$i}) {
                 return array($rowId, $i);
             }
 
             //Else, check if it is a crossed case
-            if (isset($this->casesCrossed[$rowId][$i]) && 'V' === $this->casesCrossed[$rowId][$i]) {
+            if (isset($this->map->casesCrossed[$rowId][$i]) && 'V' === $this->map->casesCrossed[$rowId][$i]) {
                 return false;
             }
         }
@@ -479,11 +441,13 @@ class Map {
      * @param $colId
      * @return array|bool Node coordinates or false if no node
      */
-    public function getNodeWithRemainingLinks($rowId, $colId)
+    public function getNeighborWithRemainingLinks($rowId, $colId)
     {
+        _d('getNeighborWithRemainingLinks: ' . $colId . ' ' . $rowId, self::$trace);
+
         //Add a link with a node and then restart to parse!
         $rightNode = $this->findRightNode($rowId, $colId);
-        if (false !== $rightNode && false !== ($nbRemainingFreeLinks = $this->countRemainingFreeLinksBetweenNodes(
+        if (false !== $rightNode && false !== ($nbRemainingFreeLinks = $this->map->countRemainingFreeLinksBetweenNodes(
                 $rowId, $colId, $rightNode[0], $rightNode[1]
             )) && 0 !== $nbRemainingFreeLinks
         ) {
@@ -491,7 +455,7 @@ class Map {
         }
 
         $bottomNode = $this->findBottomNode($rowId, $colId);
-        if (false !== $bottomNode && false !== ($nbRemainingFreeLinks = $this->countRemainingFreeLinksBetweenNodes(
+        if (false !== $bottomNode && false !== ($nbRemainingFreeLinks = $this->map->countRemainingFreeLinksBetweenNodes(
                 $rowId, $colId, $bottomNode[0], $bottomNode[1]
             )) && 0 !== $nbRemainingFreeLinks
         ) {
@@ -499,7 +463,7 @@ class Map {
         }
 
         $leftNode = $this->findLeftNode($rowId, $colId);
-        if (false !== $leftNode && false !== ($nbRemainingFreeLinks = $this->countRemainingFreeLinksBetweenNodes(
+        if (false !== $leftNode && false !== ($nbRemainingFreeLinks = $this->map->countRemainingFreeLinksBetweenNodes(
                 $rowId, $colId, $leftNode[0], $leftNode[1]
             )) && 0 !== $nbRemainingFreeLinks
         ) {
@@ -507,17 +471,217 @@ class Map {
         }
 
         $topNode = $this->findTopNode($rowId, $colId);
-        if (false !== $topNode && false !== ($nbRemainingFreeLinks = $this->countRemainingFreeLinksBetweenNodes(
+        if (false !== $topNode && false !== ($nbRemainingFreeLinks = $this->map->countRemainingFreeLinksBetweenNodes(
                 $rowId, $colId, $topNode[0], $topNode[1]
             )) && 0 !== $nbRemainingFreeLinks
         ) {
             return $topNode;
         }
 
+        _d('Not found', self::$trace);
         return false;
+    }
+
+    /**
+     * Try to link a node to its neighbors
+     * @param int $rowId
+     * @param int $colId
+     * @return int|bool Number of added links or false if not a node
+     */
+    public function linkNode($rowId, $colId) {
+        $remainingLinks = $this->map->getRemainingFreeLinks($rowId, $colId);
+        if (false === $remainingLinks || 0 === $remainingLinks) {
+            return $remainingLinks;
+        }
+
+        $neighborRemainingFreeLinks = 0;
+
+        _d('Node to link: ' . $colId . ' ' . $rowId);
+
+        $rightNode = $this->findRightNode($rowId, $colId);
+        $rightRemainingFreeLinks = 0;
+        if (false !== $rightNode) {
+            $rightRemainingFreeLinks = $this->map->countRemainingFreeLinksBetweenNodes($rowId, $colId, $rightNode[0], $rightNode[1]);
+            $neighborRemainingFreeLinks += $rightRemainingFreeLinks;
+        }
+        _d($rightNode);
+        _d($rightRemainingFreeLinks);
+
+        $bottomNode = $this->findBottomNode($rowId, $colId);
+        $bottomRemainingFreeLinks = 0;
+        if (false !== $bottomNode) {
+            $bottomRemainingFreeLinks = $this->map->countRemainingFreeLinksBetweenNodes($rowId, $colId, $bottomNode[0], $bottomNode[1]);
+            $neighborRemainingFreeLinks += $bottomRemainingFreeLinks;
+        }
+        _d($bottomNode);
+        _d($bottomRemainingFreeLinks);
+
+        $leftNode = $this->findLeftNode($rowId, $colId);
+        $leftRemainingFreeLinks = 0;
+        if (false !== $leftNode) {
+            $leftRemainingFreeLinks = $this->map->countRemainingFreeLinksBetweenNodes($rowId, $colId, $leftNode[0], $leftNode[1]);
+            $neighborRemainingFreeLinks += $leftRemainingFreeLinks;
+        }
+        _d($leftNode);
+        _d($leftRemainingFreeLinks);
+
+        $topNode = $this->findTopNode($rowId, $colId);
+        $topRemainingFreeLinks = 0;
+        if (false !== $topNode) {
+            $topRemainingFreeLinks = $this->map->countRemainingFreeLinksBetweenNodes($rowId, $colId, $topNode[0], $topNode[1]);
+            $neighborRemainingFreeLinks += $topRemainingFreeLinks;
+        }
+        _d($topNode);
+        _d($topRemainingFreeLinks);
+
+        _d('$remainingLinks: ' . $remainingLinks);
+        _d('$neighborRemainingFreeLinks: ' . $neighborRemainingFreeLinks);
+
+        $nbOfLinksNotToAdd = $neighborRemainingFreeLinks - $remainingLinks;
+        if ($nbOfLinksNotToAdd >= 2) {
+            return 0;
+        }
+
+        $nbAddedLinks = 0;
+        if (0 !== $rightRemainingFreeLinks) {
+            for ($i = $rightRemainingFreeLinks - $nbOfLinksNotToAdd; $i > 0; --$i) {
+                _d('Add link with right');
+                $this->map->addLink($rowId, $colId, $rightNode[0], $rightNode[1]);
+                $nbAddedLinks++;
+            }
+        }
+
+        if (0 !== $bottomRemainingFreeLinks) {
+            for ($i = $bottomRemainingFreeLinks - $nbOfLinksNotToAdd; $i > 0; --$i) {
+                _d('Add link with bottom');
+                $this->map->addLink($rowId, $colId, $bottomNode[0], $bottomNode[1]);
+                $nbAddedLinks++;
+            }
+        }
+
+        if (0 !== $leftRemainingFreeLinks) {
+            for ($i = $leftRemainingFreeLinks - $nbOfLinksNotToAdd; $i > 0; --$i) {
+                _d('Add link with left');
+                $this->map->addLink($rowId, $colId, $leftNode[0], $leftNode[1]);
+                $nbAddedLinks++;
+            }
+        }
+
+        if (0 !== $topRemainingFreeLinks) {
+            for ($i = $topRemainingFreeLinks - $nbOfLinksNotToAdd; $i > 0; --$i) {
+                _d('Add link with top');
+                $this->map->addLink($rowId, $colId, $topNode[0], $topNode[1]);
+                $nbAddedLinks++;
+            }
+        }
+
+        //_d($this->casesCrossed);
+
+        return $nbAddedLinks;
+    }
+
+    protected static $trace = true;
+
+    /**
+     * Make a supposition
+     *
+     * @return bool
+     */
+    public function assume() {
+        do {
+            $hasClosedSubNetwork = false;
+            //If already assume a link and still false, block the link and continue.
+            if (isset($node)) {
+                _d('Block ' . $colId. ' ' . $rowId . ' -> ' . $node[1] . ' ' . $node[0], self::$trace);
+                _d('Blocked: ' . $this->map->blockLink($rowId, $colId, $node[0], $node[1]), self::$trace);
+
+                return $this->parse($this->map);
+            }
+
+            $node = false;
+
+            //Find node with remaining free links...
+            foreach ($this->map->nodes as $rowId => $cols) {
+                foreach ($cols as $colId => $nbRemainingLinks) {
+                    _d('Checking ' . $colId . ' ' . $rowId . ': ' . $nbRemainingLinks, self::$trace);
+                    if (0 === $nbRemainingLinks) {
+                        continue;
+                    }
+
+                    if (false === ($node = $this->getNeighborWithRemainingLinks($rowId, $colId))) {
+                        continue;
+                    }
+
+                    _d('Found', true);
+                    break 2;
+                }
+            }
+
+            if (false === $node) {
+                return false;
+            }
+
+            if ($colId == 2 && $rowId == 8 && $node[1] == 3 && $node[0] == 8) {
+                self::$trace = true;
+            }
+
+            _d('Assume ' . $colId. ' ' . $rowId . ' -> ' . $node[1] . ' ' . $node[0], self::$trace);
+            $clone = clone($this->map);
+            $clone->addLink($rowId, $colId, $node[0], $node[1]);
+            if ($clone->hasAClosedSubNetwork()) {
+                _d('Sub network detected', true);
+                $hasClosedSubNetwork = true;
+                $parser = new static();
+                continue;
+            }
+
+            $parser = new static();
+        } while ($hasClosedSubNetwork || false === ($r = $parser->parse($clone)) || $onManyNetwork = (false === $r->isOnOneNetwork()));
+        _d($onManyNetwork, self::$trace);
+
+        return $onManyNetwork ? false : $r;
+    }
+
+    /**
+     * Parse map
+     *
+     * @param Map $map
+     *
+     * @return Map|bool Map fully filled or false if impossible
+     */
+    public function parse($map) {
+        $this->map = $map;
+
+        while (true) {
+            _d('New parse!', self::$trace);
+            $nbAddedLinks = 0;
+            foreach ($this->map->nodes as $rowId => $row) {
+                foreach ($row as $colId => $nbFreeNodes) {
+                    if (0 === $nbFreeNodes) {
+                        continue;
+                    }
+
+                    $nbAddedLinks += $this->linkNode($rowId, $colId);
+                }
+            }
+            _d($this->map->nodes);
+            _d($nbAddedLinks, self::$trace);
+
+            if (0 === $nbAddedLinks) {
+                //If there still are some nodes with links to add...
+                if ($this->map->existsNonFilledNodes()) {
+                    _d('Exists non filled nodes.', self::$trace);
+                    return $this->assume();
+                }
+                _d('All nodes filled.');
+
+                return $this->map;
+            }
+        }
     }
 }
 
 $map = new Map($lines, $width, $height);
-$map->parse()
-    ->displayResult();
+$parser = new DummyParser($map);
+$renderer = new MapRenderer($parser->parse($map));
+$renderer->render();
