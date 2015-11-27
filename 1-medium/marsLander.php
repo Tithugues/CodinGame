@@ -241,24 +241,24 @@ class State
 
 class DummyTrajectoryCalculation
 {
-    const HEIGHT_ADJUSTMENT = 500;
-    const GLOBAL_ANGLE = 25;
-    const ANGLE_ADJUSTMENT = 45;
-    const GLOBAL_POWER = 3;
-    const VERTICAL_SPEED_LIMIT = -35;
-    const FACTOR_ADJUSTMENT = 0.7;
+    const GRAVITY = 3.711;
 
-    protected $aim = [];
+    const WRONG_WAY = false;
 
     /**
      * @param Map $map
      */
     public function run($map)
     {
+
+        $aimXs = $map->getLandXs();
+        $aimX = ($aimXs[0] + $aimXs[1])/2;
+        //unset($aimXs);
+        $aimY = $map->getLandY();
+
         // game loop
         while (TRUE)
         {
-            $correct = false;
             fscanf(STDIN, "%d %d %d %d %d %d %d",
                 $X,
                 $Y,
@@ -268,119 +268,114 @@ class DummyTrajectoryCalculation
                 $R, // the rotation angle in degrees (-90 to 90).
                 $P // the thrust power (0 to 4).
             );
-            $state = State::factory($X, $Y, $HS, $VS, $F, $R, $P);
 
-            $aim = [];
-            $aim = $this->getAim($map, $state);
-            _d($aim);
+            $speed = $this->getSpeed($VS, $HS);
 
-            if ($X < $aim['x']) {
-                _d('if1');
-                $nextR = -static::GLOBAL_ANGLE;
-                $nextP = static::GLOBAL_POWER;
-            } elseif ($aim['x'] < $X) {
-                _d('elseif1');
-                $nextR = static::GLOBAL_ANGLE;
-                $nextP = static::GLOBAL_POWER;
-            } else {
-                if ($HS < -20/* || $X < ($flatPlace[0] + $flatPlace[1]) / 2*/) {
-                    _d('if2');
-                    $nextR = -static::ANGLE_ADJUSTMENT;
-                    $nextP = static::GLOBAL_POWER;
-                    $correct = false;
-                } elseif ($HS > 20/* || ($flatPlace[0] + $flatPlace[1]) / 2 < $X*/) {
-                    _d('elseif2');
-                    $nextR = static::ANGLE_ADJUSTMENT;
-                    $nextP = static::GLOBAL_POWER;
-                    $correct = false;
-                } else {
-                    _d('else');
-                    $nextR = 0;
-                    $nextP = static::GLOBAL_POWER;
+            //If just above the land place, straight
+            if ($aimXs[0]-100 < $X && $X < $aimXs[1]+100 && $Y > $aimY && $VS > -40 && abs($HS) < 20) {
+                $nextP = $P - 1;
+                if ($VS < -30) {
+                    $nextP = $P + 1;
                 }
+                $this->tellConf(0, $nextP);
+                continue;
             }
 
-            if ($aim['y']+500 > $Y && $aim['x'] <= $X && $X <= $aim['x']) {
-                _d('if3');
+            /*$estimatedLand = $this->getLandEstimation($map, $X, $Y, $VS, $HS, $R);
+            _d($estimatedLand);*/
+
+            $angle = $this->getNeededAngle($VS, $HS, $aimX - $X, $aimY - $Y);
+
+            if (is_nan($angle)) {
+                $nextR = 30;
+                if ($X < $aimX) {
+                    $nextR *= -1;
+                }
+
+                $nextP = 4;
+                $this->tellConf($nextR, $nextP);
+                continue;
+            }
+
+            $nextR = round($angle);
+            $nextP = 4;
+
+            if ($VS > -18) {
+                $nextP = $P - 1;
+            } elseif ($speed > 55 || abs($HS) > 20) {
+                $nextP = 4;
                 $nextR = 0;
-            }
-
-            if ($HS < -45) {
-                _d('if4');
-                $nextR = -static::GLOBAL_ANGLE;
                 if ($VS != 0) {
-                    $nextR = -round(rad2deg(atan(abs($HS / $VS)))*static::FACTOR_ADJUSTMENT);
+                    $nextR = round(rad2deg(atan(abs($HS / $VS))) * 0.7);
+                    _d('land');
+                    _d($aimX);
+                    _d($X);
+                    if ($aimX < $X) {
+                        _d('reverse');
+                        $nextR *= -1;
+                    }
                 }
-                $correct = true;
-            } elseif ($HS > 45) {
-                _d('elseif4');
-                $nextR = static::GLOBAL_ANGLE;
-                if ($VS != 0) {
-                    $nextR = round(rad2deg(atan(abs($HS / $VS)))*static::FACTOR_ADJUSTMENT);
-                }
-                $correct = true;
             }
 
-            if (-10 < $HS && $HS < 10 && $aim['x'] <= $X && $X <= $aim['x']) {
-                _d('if5');
-                $nextR = 0;
+            if ($nextP < 0) {
+                $nextP = 0;
             }
 
-            if ($VS < static::VERTICAL_SPEED_LIMIT) {
-                _d('if6');
-                $nextP = 4;
-            }
-
-            if ($correct && (abs($VS)+abs($HS) > 65 || $VS < -50)) {
-                _d('if7');
-                $nextP = 4;
-            }
-
-            if ($Y <= $aim['y']+static::HEIGHT_ADJUSTMENT) {
-                _d('if8');
-                _d($aim['y']);
-                $nextP = 4;
-            }
-
-            echo("$nextR $nextP\n"); // R P. R is the desired rotation angle. P is the desired thrust power.
+            $this->tellConf($nextR, $nextP);
         }
+    }
 
+    protected function tellConf($angle, $power)
+    {
+        $power = $this->filterPower($power);
+        echo("$angle $power\n");
+    }
+
+    protected function filterPower($power)
+    {
+        return min(4, max(0, $power));
+    }
+
+    protected function getSpeed($verticalSpeed, $horizontalSpeed)
+    {
+        return sqrt(pow($verticalSpeed, 2) + pow($horizontalSpeed, 2));
     }
 
     /**
      * @param Map $map
+     * @param int $verticalSpeed
+     * @param int $horizontalSpeed
+     * @param int $angle
      *
-     * @return array
+     * @return int
      */
-    protected function getAim($map, $state)
+    protected function getLandEstimation($map, $x, $y, $verticalSpeed, $horizontalSpeed, $angle)
     {
-        //Find aim on land area
-        $landPlaceXs = $map->getLandXs();
-        if (($hPos = $state->getHorizontalPosition($map)) === State::LEFT) {
-            $aim['x'] = round(($landPlaceXs[0]*2 + $landPlaceXs[1]) / 3, 1);
-        } elseif ($hPos === State::RIGHT) {
-            $aim['x'] = round(($landPlaceXs[0] + $landPlaceXs[1]*2) / 3, 1);
-        } else {
-            $aim['x'] = $state->getX();
-        }
-        $aim['y'] = $map->getLandY();
-
-        $fx = Fx::getFx($myX = $state->getX(), $state->getY(), $aim['x'], $aim['y']);
-
-        if (false === $fx) {
-            return ['x' => $myX, 'y' => $map->getLandY()];
+        $xs = $map->getLandXs();
+        if (($x < $xs[0] && $map->getDirection($horizontalSpeed) === Map::LEFT) || ($xs[0] < $x && $map->getDirection($horizontalSpeed) === Map::RIGHT)) {
+            return static::WRONG_WAY;
         }
 
-        //Go through all edges to see if one is going through my way
-        foreach ($map->getEdgesF() as $fxEdge) {
-            $crossingX = $fx->getCrossingX($fxEdge);
-            if (($myX < $crossingX && $crossingX < $aim['x']) || ($aim['x'] < $crossingX && $crossingX < $myX)) {
-                $aim['x'] = $crossingX;
-                $aim['y'] = $fx->getY($crossingX) + 100;
-            }
-        }
+        $speed = sqrt(pow($verticalSpeed, 2) + pow($horizontalSpeed, 2));
+        $angleRad = deg2rad(90 - abs($angle));
 
-        return $aim;
+        $d = $speed * cos($angleRad) / static::GRAVITY * ($speed * sin($angleRad) + sqrt(pow($speed * sin($angleRad), 2) + 2 * static::GRAVITY));
+
+        return $d;
+    }
+
+    protected function getNeededAngle($verticalSpeed, $horizontalSpeed, $aimX, $aimY)
+    {
+        $speed = sqrt(pow($verticalSpeed, 2) + pow($horizontalSpeed, 2));
+
+        $angle = atan(
+            pow($speed, 2) + sqrt(pow($speed, 4) - static::GRAVITY * (static::GRAVITY * pow($aimX, 2) + 2 * $aimY * pow($speed, 2)))
+            / (static::GRAVITY * $aimX)
+        );
+        _d($speed);
+        _d($angle);
+
+        return $angle;
     }
 }
 
