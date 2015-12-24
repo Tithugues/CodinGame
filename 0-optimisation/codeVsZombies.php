@@ -3,7 +3,7 @@
  * Save humans, destroy zombies!
  **/
 
-define('DEBUG', true);
+define('DEBUG', false);
 
 /**
  * Debugger
@@ -125,201 +125,13 @@ class StrategyFactory
      */
     public static function getStrategy()
     {
-        return new DummyStrategy6();
+        return new DummyStrategy7();
     }
 }
 
 interface StrategyInterface
 {
     public function findDirection($humans, $zombies, $me);
-}
-
-class DummyStrategy3 extends StrategyFactory implements StrategyInterface
-{
-    public function findDirection($humans, $zombies, $me)
-    {
-        if (1 === count($zombies)) {
-            return array_shift($zombies);
-        }
-
-        $closestHuman = null;
-        $closestDist = null;
-        foreach ($humans as $humanId => $human) {
-            $myDistFromHuman = Map::getDist($human['x'], $human['y'], $me['x'], $me['y']);
-            $nbRoundMeToHuman = $myDistFromHuman / 1000;
-
-            foreach ($zombies as $zombie) {
-                $dist = Map::getDist($zombie['xNext'], $zombie['yNext'], $human['x'], $human['y']);
-
-                //Count nb round before zombie eating human
-                $nbRoundZombieToHuman = $dist / 400;
-                _d('My nb round: ' . $nbRoundMeToHuman);
-                _d('Zombie nb round: ' . $nbRoundZombieToHuman);
-                if ($nbRoundZombieToHuman < $nbRoundMeToHuman) {
-                    _d('Human ' . $humanId . ' too far.');
-                    continue;
-                }
-
-                if (null === $closestHuman || $dist < $closestDist) {
-                    $closestHuman = $human;
-                    $closestDist = $dist;
-                }
-            }
-        }
-
-        return $closestHuman;
-    }
-}
-
-class DummyStrategy4 extends StrategyFactory implements StrategyInterface
-{
-    public function findDirection($humans, $zombies, $me)
-    {
-        if (1 === count($zombies)) {
-            return array_shift($zombies);
-        }
-
-        $closestZombie = null;
-        $closestDist = null;
-        foreach ($humans as $humanId => $human) {
-            $myDistFromHuman = Map::getDist($human['x'], $human['y'], $me['x'], $me['y']);
-            $nbRoundMeToHuman = $myDistFromHuman / 1000;
-
-            foreach ($zombies as $zombie) {
-                $dist = Map::getDist($zombie['xNext'], $zombie['yNext'], $human['x'], $human['y']);
-
-                //Count nb round before zombie eating human
-                $nbRoundZombieToHuman = $dist / 400;
-                _d('My nb round: ' . $nbRoundMeToHuman);
-                _d('Zombie nb round: ' . $nbRoundZombieToHuman);
-                if ($nbRoundZombieToHuman < $nbRoundMeToHuman) {
-                    _d('Human ' . $humanId . ' too far.');
-                    continue;
-                }
-
-                if (null === $closestZombie || $dist < $closestDist) {
-                    $closestZombie = $zombie;
-                    $closestDist = $dist;
-                }
-            }
-        }
-
-        return $closestZombie;
-    }
-}
-
-class DummyStrategy5 extends StrategyFactory implements StrategyInterface
-{
-    public function findDirection($humans, $zombies, $me)
-    {
-        //$humans[-1] = $me;
-        $zombies = $this->calculateDistanceBetweenZombiesAndClosestHuman($zombies, $humans);
-
-        $destination = null;
-        $closestDist = null;
-        foreach ($zombies as $zombieId => $zombie) {
-            $human = $humans[$zombie['closestHumanId']];
-            _d('Zombie id to check: ' . $zombieId);
-            $crossingPoint = $this->crossingZombieRoadBeforeItEatsHuman($me, $zombie, $human);
-
-            if (false === $crossingPoint) {
-                _d('can\'t save him.');
-                continue;
-            }
-
-            _d($crossingPoint);
-            $distBetweenZombieAndHuman = Map::getDist($zombie['x'], $zombie['y'], $human['x'], $human['y']);
-            $distCrossingPoint = Map::getDist($me['x'], $me['y'], $crossingPoint['x'], $crossingPoint['y']);
-            _d('Dist between me and crossing point with zombie: ' . $distCrossingPoint);
-
-            if (null === $destination || $distBetweenZombieAndHuman < $closestDist) {
-                _d('New zombie id: ' . $zombieId);
-                _d('New dist between zombie and human: ' . $distCrossingPoint);
-                $destination = ['x' => $crossingPoint['x'], 'y' => $crossingPoint['y']];
-                $closestDist = $distBetweenZombieAndHuman;
-            }
-        }
-
-        _d($destination);
-        if (null === $destination) {
-            if (1 === count($zombies)) {
-                $zombie = array_shift($zombies);
-                return ['x' => $zombie['x'], 'y' => $zombie['y']];
-            }
-            return $me;
-        }
-
-        return $destination;
-    }
-
-    /**
-     * @param $me
-     * @param $zombie
-     * @param $human
-     *
-     * @return array
-     */
-    public function crossingZombieRoadBeforeItEatsHuman($me, $zombie, $human)
-    {
-        $destination = false;
-
-        $xStep = $zombie['xNext'] - $zombie['x'];
-        $yStep = $zombie['yNext'] - $zombie['y'];
-
-        $distZombieToHuman = Map::getDist($zombie['x'], $zombie['y'], $human['x'], $human['y']);
-
-        $nbRoundZombieToThisPosition = 0;
-        $last = false;
-        do {
-            if ($last) {
-                return false;
-            }
-
-            ++$nbRoundZombieToThisPosition;
-            if ($distZombieToHuman <= 400) {
-                $zombie['x'] = $human['x'];
-                $zombie['y'] = $human['y'];
-                $last = true;
-            } else {
-                $zombie['x'] += $xStep;
-                $zombie['y'] += $yStep;
-            }
-
-            $myDistToZombiePosition = Map::getDist($me['x'], $me['y'], $zombie['x'], $zombie['y']);
-            $nbRoundMeToZombie = ($myDistToZombiePosition-2000) / 1000;
-
-            $distZombieToHuman = Map::getDist($zombie['x'], $zombie['y'], $human['x'], $human['y']);
-
-            //If I can reach the zombie, set position and leave.
-            if ($nbRoundMeToZombie <= $nbRoundZombieToThisPosition) {
-                return ['x' => $zombie['x'], 'y' => $zombie['y']];
-            }
-        } while (true);
-
-        return $destination;
-    }
-
-    /**
-     * Calculate distance between zombies and closest human
-     * @param array $zombies
-     * @param array $humans
-     * @return array
-     */
-    private function calculateDistanceBetweenZombiesAndClosestHuman($zombies, $humans)
-    {
-        foreach ($zombies as $zombieId => &$zombie) {
-            foreach ($humans as $humanId => $human) {
-                $dist = Map::getDist($zombie['x'], $zombie['y'], $human['x'], $human['y']);
-
-                if (!array_key_exists('closestHumanId', $zombie) || $dist < $zombie['distClosestHuman']) {
-                    $zombie['closestHumanId'] = $humanId;
-                    $zombie['distClosestHuman'] = $dist;
-                }
-            }
-        }
-
-        return $zombies;
-    }
 }
 
 class DummyStrategy6 extends StrategyFactory implements StrategyInterface
@@ -441,6 +253,162 @@ class DummyStrategy6 extends StrategyFactory implements StrategyInterface
                 }
             }
         }
+        unset($zombie);
+
+        return $zombies;
+    }
+}
+
+class DummyStrategy7 extends StrategyFactory implements StrategyInterface
+{
+    public function findDirection($humans, $zombies, $me)
+    {
+        //$humans[-1] = $me;
+        $zombies = $this->calculateDistanceBetweenZombiesAndClosestHuman($zombies, $humans);
+
+        $destination = null;
+        $closestDist = null;
+
+        //Find humans that I can't save
+        _d('Find humans that will die');
+        foreach ($zombies as $zombieId => &$zombie) {
+            $human = &$humans[$zombie['closestHumanId']];
+            _d('Zombie id to check: ' . $zombieId);
+            _d('Human attacked: ' . $zombie['closestHumanId']);
+            $crossingPoint = $this->crossingZombieRoadBeforeItEatsHuman($me, $zombie, $human);
+
+            if (false === $crossingPoint) {
+                _d('Zombie id to check: ' . $zombieId);
+                _d('Human attacked: ' . $zombie['closestHumanId']);
+                _d('can\'t save him.');
+                $human['dead'] = true;
+                continue;
+            }
+
+            $zombie['crossingPoint'] = $crossingPoint;
+            _d('Can be saved if go to ');
+            _d($crossingPoint);
+        }
+        unset($zombie, $human);
+
+        _d('Zombies:');
+        _d($zombies);
+
+        _d('Target zombie');
+        foreach ($zombies as $zombieId => $zombie) {
+            _d('Zombie id to check: ' . $zombieId);
+            _d($zombie);
+            _d('Human attacked: ' . $zombie['closestHumanId']);
+
+            $human = $humans[$zombie['closestHumanId']];
+            if (array_key_exists('dead', $human) && true === $human['dead']) {
+                _d('Will kill human');
+                continue;
+            }
+
+            $crossingPoint = $zombie['crossingPoint'];
+
+            _d('$crossingPoint');
+            _d($crossingPoint);
+            $distBetweenZombieAndHuman = Map::getDist($zombie['x'], $zombie['y'], $human['x'], $human['y']);
+            $distCrossingPoint = Map::getDist($me['x'], $me['y'], $crossingPoint['x'], $crossingPoint['y']);
+            _d('Dist between me and crossing point with zombie: ' . $distCrossingPoint);
+
+            if (null === $destination || $distBetweenZombieAndHuman < $closestDist) {
+                _d('New zombie id: ' . $zombieId);
+                _d('New dist between zombie and human: ' . $distCrossingPoint);
+                $destination = ['x' => $crossingPoint['x'], 'y' => $crossingPoint['y']];
+                $closestDist = $distBetweenZombieAndHuman;
+            }
+        }
+
+        _d($destination);
+        //If there is a destination, send it.
+        if (null !== $destination) {
+            return $destination;
+        }
+
+        //If only one more zombie, try to reach it.
+        if (1 === count($zombies)) {
+            $zombie = array_shift($zombies);
+            return ['x' => $zombie['x'], 'y' => $zombie['y']];
+        }
+
+        //Else, reach one.
+        return array_shift($zombies);
+    }
+
+    /**
+     * @param $me
+     * @param $zombie
+     * @param $human
+     *
+     * @return array
+     */
+    public function crossingZombieRoadBeforeItEatsHuman($me, $zombie, $human)
+    {
+        if (array_key_exists('dead', $human)) {
+            return false;
+        }
+
+        $destination = false;
+
+        $xStep = $zombie['xNext'] - $zombie['x'];
+        $yStep = $zombie['yNext'] - $zombie['y'];
+
+        $distZombieToHuman = Map::getDist($zombie['x'], $zombie['y'], $human['x'], $human['y']);
+
+        $nbRoundZombieToThisPosition = 0;
+        $last = false;
+        do {
+            if ($last) {
+                return false;
+            }
+
+            ++$nbRoundZombieToThisPosition;
+            if ($distZombieToHuman <= 400) {
+                $zombie['x'] = $human['x'];
+                $zombie['y'] = $human['y'];
+                $last = true;
+            } else {
+                $zombie['x'] += $xStep;
+                $zombie['y'] += $yStep;
+            }
+
+            $myDistToZombiePosition = Map::getDist($me['x'], $me['y'], $zombie['x'], $zombie['y']);
+            $nbRoundMeToZombie = ($myDistToZombiePosition-2000) / 1000;
+
+            $distZombieToHuman = Map::getDist($zombie['x'], $zombie['y'], $human['x'], $human['y']);
+
+            //If I can reach the zombie, set position and leave.
+            if ($nbRoundMeToZombie <= $nbRoundZombieToThisPosition) {
+                return ['x' => $zombie['x'], 'y' => $zombie['y']];
+            }
+        } while (true);
+
+        return $destination;
+    }
+
+    /**
+     * Calculate distance between zombies and closest human
+     * @param array $zombies
+     * @param array $humans
+     * @return array
+     */
+    private function calculateDistanceBetweenZombiesAndClosestHuman($zombies, $humans)
+    {
+        foreach ($zombies as $zombieId => &$zombie) {
+            foreach ($humans as $humanId => $human) {
+                $dist = Map::getDist($zombie['x'], $zombie['y'], $human['x'], $human['y']);
+                _d('dist z-' . $zombieId . ' <-> h-' . $humanId . ' = ' . $dist);
+
+                if (!array_key_exists('closestHumanId', $zombie) || $dist < $zombie['closestHumanDist']) {
+                    $zombie['closestHumanId'] = $humanId;
+                    $zombie['closestHumanDist'] = $dist;
+                }
+            }
+        }
+        unset($zombie);
 
         return $zombies;
     }
