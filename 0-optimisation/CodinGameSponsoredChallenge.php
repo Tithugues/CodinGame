@@ -1,0 +1,1 @@
+<? $m=0;if(fscanf(STDIN,"%d")[0]){$r=explode(' ',fread(STDIN,256));$m=array_pop($r);foreach($r as $t){$v=abs($t);$n=abs($m);if($v<$n|$v==$n&$m<$t)$m=$t;}}echo"$m\n";
