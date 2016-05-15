@@ -250,10 +250,8 @@ class DummyTrajectoryCalculation
      */
     public function run($map)
     {
-
         $aimXs = $map->getLandXs();
         $aimX = ($aimXs[0] + $aimXs[1])/2;
-        //unset($aimXs);
         $aimY = $map->getLandY();
 
         // game loop
@@ -271,13 +269,24 @@ class DummyTrajectoryCalculation
 
             $speed = $this->getSpeed($VS, $HS);
 
-            //If just above the land place, straight
-            if ($aimXs[0]-100 < $X && $X < $aimXs[1]+100 && $Y > $aimY && $VS > -40 && abs($HS) < 20) {
+            $aboveLandPlace = $aimXs[0]+50 < $X && $X < $aimXs[1]-50 && $Y > $aimY;
+
+            //If just above the land place with good speed, straight.
+            if ($aboveLandPlace && $VS > -40 && abs($HS) < 20) {
+                _d('ready to land');
                 $nextP = $P - 1;
                 if ($VS < -30) {
                     $nextP = $P + 1;
                 }
+                $nextP = $this->filterPower($nextP);
                 $this->tellConf(0, $nextP);
+                continue;
+            }
+
+            //If above, so but too fast, we should slow down.
+            if ($aboveLandPlace) {
+                $nextR = $this->compensate($VS, $HS);
+                $this->tellConf($nextR, 4);
                 continue;
             }
 
@@ -376,6 +385,12 @@ class DummyTrajectoryCalculation
         _d($angle);
 
         return $angle;
+    }
+
+    private function compensate($VS, $HS)
+    {
+        _d('compensate');
+        return round(rad2deg(atan(abs($HS / $VS))) * 0.7);
     }
 }
 
