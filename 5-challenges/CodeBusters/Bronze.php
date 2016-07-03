@@ -1119,9 +1119,291 @@ class ExplorerGhostRemembererManager implements ManagerInterface
                 $closestGhostDistance = false;
                 $currentDistance = Rule::getDistance($busterCoordinates[0], $busterCoordinates[1], $ghostCoordinates[0], $ghostCoordinates[1]);
                 if ($closestGhostId === false || $currentDistance < $closestGhostDistance) {
-                    
+
                 }
             }
+
+            //Nothing to do? So let's move...
+            if (!array_key_exists($busterId, $this->myBusters)) {
+                $this->actions[$busterId] = 'MOVE ' . mt_rand(0, 16000) . ' ' . mt_rand(0, 9000);
+            } else {
+                $this->actions[$busterId] = 'MOVE ' . mt_rand($this->areas[$busterId][0][0], $this->areas[$busterId][0][1]) . ' ' . mt_rand($this->areas[$busterId][1][0], $this->areas[$busterId][1][1]);
+            }
+        }
+    }
+
+    public function getBusterAction($busterId)
+    {
+        if (array_key_exists($busterId, $this->actions)) {
+            return $this->actions[$busterId];
+        }
+
+        return 'MOVE 8000 4500';
+    }
+}
+
+class BronzeExplorerGhostRemembererManager implements ManagerInterface
+{
+    const ENTITYTYPE_TEAM0 = 0;
+    const ENTITYTYPE_TEAM1 = 1;
+    const ENTITYTYPE_GHOST = -1;
+
+    protected $bustersPerPlayer;
+    protected $ghostCount;
+    protected $myTeamId;
+    /** @var MapInterface */
+    protected $map;
+
+    protected $areas;
+
+    /** @var BusterInterface[] */
+    protected $myBusters;
+    /** @var BusterInterface[] */
+    protected $hisBusters;
+    /** @var GhostInterface[] */
+    protected $ghosts;
+
+    /** @var string[] */
+    protected $actions;
+
+    /** @var GhostInterface[] */
+    protected $ghostsISaw;
+
+    public function __construct($bustersPerPlayer, $ghostCount, $myTeamId, $map)
+    {
+        $this->bustersPerPlayer = $bustersPerPlayer;
+        $this->ghostCount = $ghostCount;
+        $this->myTeamId = $myTeamId;
+        $this->map = $map;
+
+        $this->myBusters = [];
+
+        $this->defineAreas();
+    }
+
+    private function defineAreas()
+    {
+        if ($this->bustersPerPlayer == 2) {
+            $this->areas = [
+                [[0, 8500], [0, 9000]],
+                [[7501, 16000], [0, 9000]],
+                [[0, 8500], [0, 9000]],
+                [[7501, 16000], [0, 9000]],
+            ];
+        } elseif ($this->bustersPerPlayer === 3) {
+            $this->areas = [
+                [[0, 5500], [0, 9000]],
+                [[5201, 10600], [0, 9000]],
+                [[9801, 16000], [0, 9000]],
+                [[0, 5500], [0, 9000]],
+                [[5201, 10600], [0, 9000]],
+                [[9801, 16000], [0, 9000]],
+            ];
+        } elseif ($this->bustersPerPlayer === 4) {
+            $this->areas = [
+                [[0, 8500], [0, 5000]],
+                [[0, 8500], [4000, 9000]],
+                [[7501, 16000], [0, 5000]],
+                [[5701, 16000], [4000, 9000]],
+                [[0, 8500], [0, 5000]],
+                [[0, 8500], [4000, 9000]],
+                [[7501, 16000], [0, 5000]],
+                [[5701, 16000], [4000, 9000]],
+            ];
+        }
+    }
+
+    public function newTurn()
+    {
+        $this->ghosts = [];
+        $this->hisBusters = [];
+        $this->actions = [];
+    }
+
+    public function getMyBustersId()
+    {
+        return array_keys($this->myBusters);
+    }
+
+    public function getEntity($entityType, $entityId)
+    {
+        //Look for a ghost?
+        if ($entityType === static::ENTITYTYPE_GHOST) {
+            return $this->getGhost($entityId);
+        }
+
+        //Look for ennemy?
+        if ($entityType !== $this->myTeamId) {
+            return $this->getEnnemy($entityId);
+        }
+
+        //Look for ally?
+        return $this->getAlly($entityId);
+    }
+
+    protected function getGhost($entityId)
+    {
+        return array_key_exists($entityId, $this->ghosts) ? $this->ghosts[$entityId] : false;
+    }
+
+    protected function getEnnemy($entityId)
+    {
+        return array_key_exists($entityId, $this->hisBusters) ? $this->hisBusters[$entityId] : false;
+    }
+
+    protected function getAlly($entityId)
+    {
+        return array_key_exists($entityId, $this->myBusters) ? $this->myBusters[$entityId] : false;
+    }
+
+    public function updateEntity($entityType, $entityId, EntityInterface $entity)
+    {
+        //Ghost
+        if (static::ENTITYTYPE_GHOST === $entityType) {
+            $this->ghosts[$entityId] = $entity;
+            return;
+        }
+
+        //Ennemy's buster
+        if ($this->myTeamId !== $entityType) {
+            $this->hisBusters[$entityId] = $entity;
+            return;
+        }
+
+        //My buster
+        //Update or create?
+        if (array_key_exists($entityId, $this->myBusters)) {
+            $this->myBusters[$entityId]->update($entity);
+        } else {
+            $this->myBusters[$entityId] = $entity;
+        }
+    }
+
+    protected function fixCoordinates($coordinates)
+    {
+        $coordinates[0] = max(0, min(16000, $coordinates[0]));
+        $coordinates[1] = max(0, min(9000, $coordinates[1]));
+        return $coordinates;
+    }
+
+    public function analyse()
+    {
+        $baseCoordinates = $this->map->getBaseCoordinates();
+        $stunnedEnnemy = [];
+
+        foreach ($this->ghosts as $ghostId => $ghost) {
+            $this->ghostsISaw[$ghostId] = $ghost;
+        }
+        unset($ghostId, $ghost);
+
+        foreach ($this->myBusters as $busterId => $myBuster) {
+            $busterCoordinates = $myBuster->getCoordinates();
+            foreach ($this->ghostsISaw as $ghostId => $ghost) {
+                $ghostCoordinates = $ghost->getCoordinates();
+                if (Rule::getDistance($busterCoordinates[0], $busterCoordinates[1], $ghostCoordinates[0], $ghostCoordinates[1]) < 500) {
+                    unset($this->ghostsISaw[$ghostId]);
+                }
+            }
+        }
+        unset($busterId, $buster, $busterCoordinates, $ghostId, $ghost, $ghostCoordinates);
+
+        foreach ($this->myBusters as $busterId => $myBuster) {
+            $busterCoordinates = $myBuster->getCoordinates();
+
+            //Ghost in bag? Go home and release ghost.
+            if ($myBuster->hasBusted()) {
+                if (Rule::getDistance($baseCoordinates[0], $baseCoordinates[1], $busterCoordinates[0], $busterCoordinates[1]) <= 1600) {
+                    $this->actions[$busterId] = 'RELEASE';
+                    $myBuster->release();
+                    continue;
+                }
+
+                $this->actions[$busterId] = 'MOVE ' . implode(' ', $baseCoordinates);
+                continue;
+            }
+
+            //Is there a closed enough ghost?
+            foreach ($this->ghosts as $ghostId => $ghost) {
+                $ghostCoordinates = $ghost->getCoordinates();
+                $distance = Rule::getDistance($busterCoordinates[0], $busterCoordinates[1], $ghostCoordinates[0], $ghostCoordinates[1]);
+
+                //Too close!
+                if ($distance < 900) {
+                    $nextBusterCoordinates = $busterCoordinates;
+                    $nextBusterCoordinates[0] += mt_rand(-600, 600);
+                    $nextBusterCoordinates[1] += mt_rand(-600, 600);
+                    $nextBusterCoordinates = $this->fixCoordinates($nextBusterCoordinates);
+                    $this->actions[$busterId] = 'MOVE ' . implode(' ', $nextBusterCoordinates);
+                    unset($nextBusterCoordinates);
+                    continue 2;
+                }
+
+                //Right distance!
+                if ($distance < 1760) {
+                    $this->actions[$busterId] = 'BUST ' . $ghostId;
+                    $myBuster->bust();
+                    $spottedGhosts[$ghostId] = true;
+                    continue 2;
+                }
+
+                //Still too far!
+                if ($distance < 2200) {
+                    $this->actions[$busterId] = 'MOVE ' . implode(' ', $ghostCoordinates);
+                    $spottedGhosts[$ghostId] = true;
+                    continue 2;
+                }
+            }
+
+            if (!$myBuster->hasStunned()) {
+                //Is there a closed enough ennemy to stun him?
+                foreach ($this->hisBusters as $ennemyId => $ennemy) {
+                    if ($ennemy->isStunned() || array_key_exists($ennemyId, $stunnedEnnemy)) {
+                        continue;
+                    }
+
+                    $ennemyCoordinates = $ennemy->getCoordinates();
+                    $distance = Rule::getDistance($busterCoordinates[0], $busterCoordinates[1], $ennemyCoordinates[0], $ennemyCoordinates[1]);
+
+                    //Right distance!
+                    if ($distance < 1760) {
+                        $this->actions[$busterId] = 'STUN ' . $ennemyId;
+                        $myBuster->stun();
+                        $ennemy->stunned();
+                        $stunnedEnnemy[$ennemyId] = true;
+                        continue 2;
+                    }
+
+                    //Still too far!
+                    if ($distance < 2200) {
+                        $this->actions[$busterId] = 'MOVE ' . implode(' ', $ennemyCoordinates);
+                        $stunnedEnnemy[$ennemyId] = true;
+                        continue 2;
+                    }
+                }
+            }
+        }
+
+        foreach ($this->myBusters as $busterId => $buster) {
+            if (array_key_exists($busterId, $this->actions)) {
+                continue;
+            }
+
+            $busterCoordinates = $buster->getCoordinates();
+
+            /*foreach ($this->ghostsISaw as $ghostId => $ghost) {
+                $ghostCoordinates = $ghost->getCoordinates();
+                $closestGhostId = false;
+                $closestGhostDistance = false;
+                $currentDistance = Rule::getDistance($busterCoordinates[0], $busterCoordinates[1], $ghostCoordinates[0], $ghostCoordinates[1]);
+                if ($closestGhostId === false || $currentDistance < $closestGhostDistance) {
+                    $closestGhostId = $ghostId;
+                    $closestGhostDistance = $currentDistance;
+                }
+            }
+            if (isset($closestGhostId)) {
+                $this->actions[$busterId] = 'MOVE ' . implode(' ', $this->getGhost($closestGhostId)->getCoordinates());
+                continue;
+            }*/
 
             //Nothing to do? So let's move...
             if (!array_key_exists($busterId, $this->myBusters)) {
@@ -1328,7 +1610,7 @@ class DummyBuster implements BusterInterface
     }
 }
 
-    // the amount of busters you control
+// the amount of busters you control
 fscanf(STDIN, "%d", $bustersPerPlayer);
 // the amount of ghosts on the map
 fscanf(STDIN, "%d", $ghostCount);
