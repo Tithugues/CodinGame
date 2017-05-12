@@ -12,14 +12,62 @@ function _($trace, $force = false)
     }
 }
 
+define('TARGET_SAMPLES', 'SAMPLES');
 define('TARGET_DIAGNOSIS', 'DIAGNOSIS');
 define('TARGET_MOLECULES', 'MOLECULES');
 define('TARGET_LABORATORY', 'LABORATORY');
 
 /**
+ * Interface SampleDataInterface
+ */
+interface SampleDataInterface {
+    /**
+     * SampleData constructor.
+     *
+     * @param int $id
+     * @param int $carriedBy
+     * @param int $rank
+     * @param int $expertiseGain
+     * @param int $health
+     * @param int[] $costs
+     */
+    public function __construct($id, $carriedBy, $rank, $expertiseGain, $health, $costs);
+
+    /**
+     * @return int
+     */
+    public function getId();
+
+    /**
+     * @return int
+     */
+    public function getCarriedBy();
+
+    /**
+     * @return int
+     */
+    public function getHealth();
+
+    /**
+     * @return int[]
+     */
+    public function getCosts();
+
+    /**
+     * @return bool
+     */
+    public function isFree();
+
+    /**
+     * @return bool
+     */
+    public function isDiagnosed();
+}
+
+/**
  * Class SampleData
  */
-class SampleData {
+class SampleData implements SampleDataInterface {
     /** @var int */
     protected $id;
 
@@ -89,6 +137,22 @@ class SampleData {
     {
         return $this->costs;
     }
+
+    /**
+     * @return bool
+     */
+    public function isFree()
+    {
+        return -1 === $this->carriedBy;
+    }
+
+    /**
+     * @return bool
+     */
+    public function isDiagnosed()
+    {
+        return reset($this->costs) !== -1;
+    }
 }
 
 /**
@@ -107,11 +171,11 @@ interface RobotInterface {
     public function __construct($target, $eta, $score, $storages, $expertises);
 
     /**
-     * @param SampleData $sampleData
+     * @param SampleDataInterface $sampleData
      *
      * @return DummyRobot
      */
-    public function setSampleData(SampleData $sampleData);
+    public function setSampleData(SampleDataInterface $sampleData);
 
     /**
      * @return string
@@ -144,7 +208,7 @@ class DummyRobot implements RobotInterface {
      */
     private $expertises;
     /**
-     * @var SampleData[]
+     * @var SampleDataInterface[]
      */
     protected $sampleData = array();
 
@@ -167,11 +231,11 @@ class DummyRobot implements RobotInterface {
     }
 
     /**
-     * @param SampleData $sampleData
+     * @param SampleDataInterface $sampleData
      *
      * @return DummyRobot
      */
-    public function setSampleData(SampleData $sampleData)
+    public function setSampleData(SampleDataInterface $sampleData)
     {
         $this->sampleData[$sampleData->getId()] = $sampleData;
 
@@ -184,11 +248,34 @@ class DummyRobot implements RobotInterface {
     public function act()
     {
         $carriedSampleData = $this->getCarriedSampleData();
+        $freeSampleData = $this->getFreeSampleData();
+        if (count($carriedSampleData) < 1 && count($freeSampleData) < 1) {
+            if (TARGET_SAMPLES !== $this->target) {
+                return "GOTO " . TARGET_SAMPLES . "\n";
+            } else {
+                _(__LINE__);
+                return "CONNECT " . $this->chooseRank() . "\n";
+            }
+        } elseif (count($freeSampleData) < 3
+            && count($this->getCarriedSampleData()) < 3
+            && TARGET_SAMPLES === $this->target
+        ) {
+            _(__LINE__);
+            return "CONNECT " . $this->chooseRank() . "\n";
+        }
+
+        $selfCarriedUndiagnosedSampleData = $this->getSelfCarriedUndiagnosedSampleData();
         if (count($carriedSampleData) < 1) {
             if (TARGET_DIAGNOSIS !== $this->target) {
-                return "GOTO DIAGNOSIS\n";
+                return "GOTO " . TARGET_DIAGNOSIS . "\n";
             } else {
                 return "CONNECT " . $this->chooseSampleData()->getId() . "\n";
+            }
+        } elseif (count($selfCarriedUndiagnosedSampleData) > 0) {
+            if (TARGET_DIAGNOSIS !== $this->target) {
+                return "GOTO " . TARGET_DIAGNOSIS . "\n";
+            } else {
+                return "CONNECT " . $this->chooseCarriedSampleDataToDiagnose()->getId() . "\n";
             }
         } elseif (count($carriedSampleData) < 3 && TARGET_DIAGNOSIS === $this->target) {
             return "CONNECT " . $this->chooseSampleData()->getId() . "\n";
@@ -202,7 +289,7 @@ class DummyRobot implements RobotInterface {
                 foreach ($costs as $molecule => $cost) {
                     if ($cost > $this->storages[$molecule]) {
                         if (TARGET_MOLECULES !== $this->target) {
-                            return "GOTO MOLECULES\n";
+                            return "GOTO " . TARGET_MOLECULES . "\n";
                         } else {
                             return "CONNECT " . $molecule . "\n";
                         }
@@ -212,14 +299,14 @@ class DummyRobot implements RobotInterface {
         }
 
         if (TARGET_LABORATORY !== $this->target) {
-            return "GOTO LABORATORY\n";
+            return "GOTO " . TARGET_LABORATORY . "\n";
         } else {
             return "CONNECT " . $filledSampleData->getId() . "\n";
         }
     }
 
     /**
-     * @return SampleData[]
+     * @return SampleDataInterface[]
      */
     protected function getCarriedSampleData()
     {
@@ -233,13 +320,21 @@ class DummyRobot implements RobotInterface {
     }
 
     /**
-     * @return SampleData
+     * @return SampleDataInterface
      * @throws Exception
      */
     protected function chooseSampleData()
     {
+        $maxSampleDataHealth = 0;
+
         foreach ($this->sampleData as $sampleData) {
-            if (-1 === $sampleData->getCarriedBy()) {
+            if ($sampleData->isFree() && $sampleData->getHealth() > $maxSampleDataHealth) {
+                $maxSampleDataHealth = $sampleData->getHealth();
+            }
+        }
+
+        foreach ($this->sampleData as $sampleData) {
+            if ($sampleData->isFree() && $sampleData->getHealth() === $maxSampleDataHealth) {
                 return $sampleData;
             }
         }
@@ -260,7 +355,7 @@ class DummyRobot implements RobotInterface {
     }
 
     /**
-     * @return SampleData
+     * @return SampleDataInterface
      * @throws Exception
      */
     protected function getFilledSampleData()
@@ -280,6 +375,60 @@ class DummyRobot implements RobotInterface {
         }
 
         throw new Exception('No filled sample data');
+    }
+
+    /**
+     * @return SampleDataInterface[]
+     */
+    protected function getFreeSampleData()
+    {
+        $freeSampleData = array();
+        foreach ($this->sampleData as $sampleData) {
+            if ($sampleData->isFree()) {
+                $freeSampleData[$sampleData->getId()] = $sampleData;
+            }
+        }
+        return $freeSampleData;
+    }
+
+    /**
+     * @return SampleDataInterface[]
+     */
+    protected function getFreeDiagnosedSampleData()
+    {
+        throw new Exception(__METHOD__);
+    }
+
+    /**
+     * @return SampleDataInterface[]
+     */
+    protected function getSelfCarriedUndiagnosedSampleData()
+    {
+        $carriedUndiagnosedSampleData = array();
+        foreach ($this->sampleData as $sampleData) {
+            if (0 === $sampleData->getCarriedBy() && !$sampleData->isDiagnosed()) {
+                $carriedUndiagnosedSampleData[$sampleData->getId()] = $sampleData;
+            }
+        }
+        return $carriedUndiagnosedSampleData;
+    }
+
+    /**
+     * @return SampleDataInterface
+     * @throws Exception
+     */
+    protected function chooseCarriedSampleDataToDiagnose()
+    {
+        $selfCarriedUndiagnosedSampleData = $this->getSelfCarriedUndiagnosedSampleData();
+        return reset($selfCarriedUndiagnosedSampleData);
+    }
+
+    /**
+     * @return int
+     */
+    protected function chooseRank()
+    {
+        return 2;
     }
 }
 
