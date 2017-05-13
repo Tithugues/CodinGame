@@ -173,9 +173,16 @@ interface RobotInterface {
     /**
      * @param SampleDataInterface $sampleData
      *
-     * @return DummyRobot
+     * @return $this
      */
     public function setSampleData(SampleDataInterface $sampleData);
+
+    /**
+     * @param int[] $availabilities
+     *
+     * @return $this
+     */
+    public function setAvailabilities($availabilities);
 
     /**
      * @return string
@@ -211,6 +218,10 @@ class DummyRobot implements RobotInterface {
      * @var SampleDataInterface[]
      */
     protected $sampleData = array();
+    /**
+     * @var int[]
+     */
+    private $availabilities;
 
     /**
      * DummyRobot constructor.
@@ -243,27 +254,39 @@ class DummyRobot implements RobotInterface {
     }
 
     /**
+     * @param int[] $availabilities
+     *
+     * @return $this
+     */
+    public function setAvailabilities($availabilities)
+    {
+        $this->availabilities = $availabilities;
+    }
+
+    /**
      * @return string
      */
     public function act()
     {
+        _($this->sampleData);
+
+        //SAMPLES module
         $carriedSampleData = $this->getCarriedSampleData();
         $freeSampleData = $this->getFreeSampleData();
         if (count($carriedSampleData) < 1 && count($freeSampleData) < 1) {
             if (TARGET_SAMPLES !== $this->target) {
                 return "GOTO " . TARGET_SAMPLES . "\n";
             } else {
-                _(__LINE__);
                 return "CONNECT " . $this->chooseRank() . "\n";
             }
         } elseif (count($freeSampleData) < 3
             && count($this->getCarriedSampleData()) < 3
             && TARGET_SAMPLES === $this->target
         ) {
-            _(__LINE__);
             return "CONNECT " . $this->chooseRank() . "\n";
         }
 
+        //DIAGNOSIS module
         $selfCarriedUndiagnosedSampleData = $this->getSelfCarriedUndiagnosedSampleData();
         if (count($carriedSampleData) < 1) {
             if (TARGET_DIAGNOSIS !== $this->target) {
@@ -281,6 +304,7 @@ class DummyRobot implements RobotInterface {
             return "CONNECT " . $this->chooseSampleData()->getId() . "\n";
         }
 
+        //MOLECULES module
         try {
             $filledSampleData = $this->getFilledSampleData();
         } catch (Exception $e) {
@@ -290,14 +314,16 @@ class DummyRobot implements RobotInterface {
                     if ($cost > $this->storages[$molecule]) {
                         if (TARGET_MOLECULES !== $this->target) {
                             return "GOTO " . TARGET_MOLECULES . "\n";
-                        } else {
+                        } elseif ($this->enoughAvailabilities($molecule, $cost - $this->storages[$molecule])) {
                             return "CONNECT " . $molecule . "\n";
                         }
                     }
                 }
             }
+            return "WAIT\n";
         }
 
+        //LABORATORY module
         if (TARGET_LABORATORY !== $this->target) {
             return "GOTO " . TARGET_LABORATORY . "\n";
         } else {
@@ -430,6 +456,17 @@ class DummyRobot implements RobotInterface {
     {
         return 2;
     }
+
+    /**
+     * @param string $molecule
+     * @param int $needed
+     *
+     * @return bool
+     */
+    protected function enoughAvailabilities($molecule, $needed)
+    {
+        return $this->availabilities[$molecule] >= $needed;
+    }
 }
 
 fscanf(STDIN, "%d",
@@ -474,13 +511,15 @@ while (TRUE)
             $robot = new DummyRobot($target, $eta, $score, $storages, $expertises);
         }
     }
+    $availabilities = array();
     fscanf(STDIN, "%d %d %d %d %d",
-        $availableA,
-        $availableB,
-        $availableC,
-        $availableD,
-        $availableE
+        $availabilities['A'],
+        $availabilities['B'],
+        $availabilities['C'],
+        $availabilities['D'],
+        $availabilities['E']
     );
+    $robot->setAvailabilities($availabilities);
     fscanf(STDIN, "%d",
         $sampleCount
     );
