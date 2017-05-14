@@ -5,6 +5,10 @@
 
 define('DEBUG', true);
 
+/**
+ * @param string $trace
+ * @param bool $force
+ */
 function _($trace, $force = false)
 {
     if (DEBUG === true || $force) {
@@ -57,6 +61,11 @@ interface SampleDataInterface {
      * @return bool
      */
     public function isFree();
+
+    /**
+     * @return int
+     */
+    public function getTotalCost();
 
     /**
      * @return bool
@@ -144,6 +153,18 @@ class SampleData implements SampleDataInterface {
     public function isFree()
     {
         return -1 === $this->carriedBy;
+    }
+
+    /**
+     * @return int
+     */
+    public function getTotalCost()
+    {
+        $totalCost = 0;
+        foreach ($this->costs as $cost) {
+            $totalCost += $cost;
+        }
+        return $totalCost;
     }
 
     /**
@@ -268,19 +289,20 @@ class DummyRobot implements RobotInterface {
      */
     public function act()
     {
-        _($this->sampleData);
+        $carriedSampleData = $this->getSelfCarriedSampleData();
+        $chosenSampleData = $this->chooseSampleData();
+        $sampleDataToFill = $this->chooseSampleDataToFill();
+        $filledSampleData = $this->getFilledSampleData();
 
         //SAMPLES module
-        $carriedSampleData = $this->getCarriedSampleData();
-        $freeSampleData = $this->getFreeSampleData();
-        if (count($carriedSampleData) < 1 && count($freeSampleData) < 1) {
+        if (count($carriedSampleData) === 0 && count($chosenSampleData) === 0) {
             if (TARGET_SAMPLES !== $this->target) {
                 return "GOTO " . TARGET_SAMPLES . "\n";
             } else {
                 return "CONNECT " . $this->chooseRank() . "\n";
             }
-        } elseif (count($freeSampleData) < 3
-            && count($this->getCarriedSampleData()) < 3
+        } elseif (count($chosenSampleData) < 3
+            && count($carriedSampleData) < 3
             && TARGET_SAMPLES === $this->target
         ) {
             return "CONNECT " . $this->chooseRank() . "\n";
@@ -288,27 +310,36 @@ class DummyRobot implements RobotInterface {
 
         //DIAGNOSIS module
         $selfCarriedUndiagnosedSampleData = $this->getSelfCarriedUndiagnosedSampleData();
-        if (count($carriedSampleData) < 1) {
+        if (count($carriedSampleData) === 0) { //If I don't carry anything.
             if (TARGET_DIAGNOSIS !== $this->target) {
                 return "GOTO " . TARGET_DIAGNOSIS . "\n";
-            } else {
-                return "CONNECT " . $this->chooseSampleData()->getId() . "\n";
+            } elseif (count($chosenSampleData) !== 0) {
+                return "CONNECT " . reset($chosenSampleData)->getId() . "\n";
             }
-        } elseif (count($selfCarriedUndiagnosedSampleData) > 0) {
+        } elseif (count($selfCarriedUndiagnosedSampleData) !== 0) { //If I carry some undiagnosed sample data.
             if (TARGET_DIAGNOSIS !== $this->target) {
                 return "GOTO " . TARGET_DIAGNOSIS . "\n";
             } else {
                 return "CONNECT " . $this->chooseCarriedSampleDataToDiagnose()->getId() . "\n";
             }
-        } elseif (count($carriedSampleData) < 3 && TARGET_DIAGNOSIS === $this->target) {
-            return "CONNECT " . $this->chooseSampleData()->getId() . "\n";
+        } elseif (count($carriedSampleData) < 3
+            && TARGET_DIAGNOSIS === $this->target
+            && count($chosenSampleData) !== 0
+        ) { //If I carry less than 3 sample data, I'm to DIAGNOSIS module and I found a fillable sample data.
+            return "CONNECT " . reset($chosenSampleData)->getId() . "\n";
+        }
+
+        if (count($sampleDataToFill) === 0 && count($filledSampleData) === 0) { //If I carry some unfilled sample data and can't fill anyone.
+            if (TARGET_DIAGNOSIS !== $this->target) {
+                return "GOTO " . TARGET_DIAGNOSIS . "\n";
+            } else {
+                return "CONNECT " . $this->chooseSampleDataToFree()->getId() . "\n";
+            }
         }
 
         //MOLECULES module
-        try {
-            $filledSampleData = $this->getFilledSampleData();
-        } catch (Exception $e) {
-            foreach ($carriedSampleData as $sampleData) {
+        if (count($sampleDataToFill) !== 0 && !$this->isStorageFull()) {
+            foreach ($sampleDataToFill as $sampleData) {
                 $costs = $sampleData->getCosts();
                 foreach ($costs as $molecule => $cost) {
                     if ($cost > $this->storages[$molecule]) {
@@ -320,21 +351,25 @@ class DummyRobot implements RobotInterface {
                     }
                 }
             }
-            return "WAIT\n";
         }
 
         //LABORATORY module
-        if (TARGET_LABORATORY !== $this->target) {
-            return "GOTO " . TARGET_LABORATORY . "\n";
-        } else {
-            return "CONNECT " . $filledSampleData->getId() . "\n";
+        if (count($filledSampleData) !== 0) {
+            if (TARGET_LABORATORY !== $this->target) {
+                return "GOTO " . TARGET_LABORATORY . "\n";
+            } else {
+                return "CONNECT " . reset($filledSampleData)->getId() . "\n";
+            }
         }
+
+        //Default action
+        return "WAIT\n";
     }
 
     /**
      * @return SampleDataInterface[]
      */
-    protected function getCarriedSampleData()
+    protected function getSelfCarriedSampleData()
     {
         $carriedSampleData = array();
         foreach ($this->sampleData as $sampleData) {
@@ -346,26 +381,24 @@ class DummyRobot implements RobotInterface {
     }
 
     /**
-     * @return SampleDataInterface
-     * @throws Exception
+     * @return SampleDataInterface[]
      */
     protected function chooseSampleData()
     {
         $maxSampleDataHealth = 0;
-
+        $possibleSampleData = array();
         foreach ($this->sampleData as $sampleData) {
-            if ($sampleData->isFree() && $sampleData->getHealth() > $maxSampleDataHealth) {
-                $maxSampleDataHealth = $sampleData->getHealth();
+            if ($sampleData->isFree()) {
+                if ($sampleData->getHealth() > $maxSampleDataHealth) {
+                    $maxSampleDataHealth = $sampleData->getHealth();
+                    $possibleSampleData = array($sampleData->getId() => $sampleData);
+                } elseif ($sampleData->getHealth() === $maxSampleDataHealth) {
+                    $possibleSampleData[$sampleData->getId()] = $sampleData;
+                }
             }
         }
 
-        foreach ($this->sampleData as $sampleData) {
-            if ($sampleData->isFree() && $sampleData->getHealth() === $maxSampleDataHealth) {
-                return $sampleData;
-            }
-        }
-
-        throw new Exception('No remaining sample data');
+        return $possibleSampleData;
     }
 
     /**
@@ -381,26 +414,31 @@ class DummyRobot implements RobotInterface {
     }
 
     /**
-     * @return SampleDataInterface
-     * @throws Exception
+     * @return SampleDataInterface[]
      */
     protected function getFilledSampleData()
     {
-        $carriedSampleData = $this->getCarriedSampleData();
+        $carriedSampleData = $this->getSelfCarriedSampleData();
+        $filledSampleData = array();
         foreach ($carriedSampleData as $sampleData) {
+            //_($sampleData);
             $costs = $sampleData->getCosts();
             $filled = true;
             foreach ($costs as $molecule => $cost) {
                 if ($cost > $this->storages[$molecule]) {
+                    //_('Unfilled');
                     $filled = false;
+                    break;
                 }
             }
             if ($filled) {
-                return $sampleData;
+                //_('filled');
+                $filledSampleData[$sampleData->getId()] = $sampleData;
             }
         }
+        //_($filledSampleData);
 
-        throw new Exception('No filled sample data');
+        return $filledSampleData;
     }
 
     /**
@@ -466,6 +504,75 @@ class DummyRobot implements RobotInterface {
     protected function enoughAvailabilities($molecule, $needed)
     {
         return $this->availabilities[$molecule] >= $needed;
+    }
+
+    /**
+     * @return SampleDataInterface[]
+     */
+    protected function chooseSampleDataToFill()
+    {
+        $temporaryFreeSlotStorage = $this->getFreeSlotsStorage();
+        $sampleDataToFill = array();
+        foreach ($this->getSelfCarriedSampleData() as $sampleData) {
+            if ($this->isFilled($sampleData)) {
+                //If I already have all molecules for this sample data, ignore it.
+                continue;
+            }
+
+            $fillable = true;
+            $totalRemainingCost = 0;
+            foreach ($sampleData->getCosts() as $molecule => $cost) {
+                $remainingCost = $cost - $this->storages[$molecule];
+                if (!$this->enoughAvailabilities($molecule, $remainingCost)) {
+                    $fillable = false;
+                    break;
+                } else {
+                    $totalRemainingCost += $remainingCost;
+                }
+            }
+            if ($fillable && $totalRemainingCost <= $temporaryFreeSlotStorage) {
+                $sampleDataToFill[$sampleData->getId()] = $sampleData;
+                $temporaryFreeSlotStorage -= $totalRemainingCost;
+            }
+        }
+        return $sampleDataToFill;
+    }
+
+    /**
+     * @return int
+     */
+    protected function getFreeSlotsStorage()
+    {
+        $storageAmount = 0;
+        foreach ($this->storages as $amount) {
+            $storageAmount += $amount;
+        }
+        return 10 - $storageAmount;
+
+    }
+
+    /**
+     * @return SampleDataInterface
+     */
+    protected function chooseSampleDataToFree()
+    {
+        $selfCarriedSampleData = $this->getSelfCarriedSampleData();
+        return reset($selfCarriedSampleData);
+    }
+
+    /**
+     * @param SampleDataInterface $sampleData
+     *
+     * @return bool
+     */
+    protected function isFilled(SampleDataInterface $sampleData)
+    {
+        foreach ($sampleData->getCosts() as $molecule => $cost) {
+            if ($this->storages[$molecule] < $cost) {
+                return false;
+            }
+        }
+        return true;
     }
 }
 
