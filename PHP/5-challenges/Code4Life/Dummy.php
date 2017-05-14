@@ -282,6 +282,7 @@ class DummyRobot implements RobotInterface {
     public function setAvailabilities($availabilities)
     {
         $this->availabilities = $availabilities;
+        return $this;
     }
 
     /**
@@ -289,6 +290,10 @@ class DummyRobot implements RobotInterface {
      */
     public function act()
     {
+        if ($this->eta !== 0) {
+            return "ON THE ROAD AGAIN\n";
+        }
+
         $carriedSampleData = $this->getSelfCarriedSampleData();
         $chosenSampleData = $this->chooseSampleData();
         $sampleDataToFill = $this->chooseSampleDataToFill();
@@ -338,14 +343,14 @@ class DummyRobot implements RobotInterface {
         }
 
         //MOLECULES module
-        if (count($sampleDataToFill) !== 0 && !$this->isStorageFull()) {
+        if (count($sampleDataToFill) !== 0) {
             foreach ($sampleDataToFill as $sampleData) {
                 $costs = $sampleData->getCosts();
                 foreach ($costs as $molecule => $cost) {
-                    if ($cost > $this->storages[$molecule]) {
+                    if ($cost > ($this->storages[$molecule] + $this->expertises[$molecule])) {
                         if (TARGET_MOLECULES !== $this->target) {
                             return "GOTO " . TARGET_MOLECULES . "\n";
-                        } elseif ($this->enoughAvailabilities($molecule, $cost - $this->storages[$molecule])) {
+                        } elseif ($this->enoughAvailabilities($molecule, $cost - $this->storages[$molecule] - $this->expertises[$molecule])) {
                             return "CONNECT " . $molecule . "\n";
                         }
                     }
@@ -388,7 +393,7 @@ class DummyRobot implements RobotInterface {
         $maxSampleDataHealth = 0;
         $possibleSampleData = array();
         foreach ($this->sampleData as $sampleData) {
-            if ($sampleData->isFree()) {
+            if ($sampleData->isFree() && $this->isFillable($sampleData)) {
                 if ($sampleData->getHealth() > $maxSampleDataHealth) {
                     $maxSampleDataHealth = $sampleData->getHealth();
                     $possibleSampleData = array($sampleData->getId() => $sampleData);
@@ -421,22 +426,18 @@ class DummyRobot implements RobotInterface {
         $carriedSampleData = $this->getSelfCarriedSampleData();
         $filledSampleData = array();
         foreach ($carriedSampleData as $sampleData) {
-            //_($sampleData);
             $costs = $sampleData->getCosts();
             $filled = true;
             foreach ($costs as $molecule => $cost) {
-                if ($cost > $this->storages[$molecule]) {
-                    //_('Unfilled');
+                if ($cost > ($this->storages[$molecule] + $this->expertises[$molecule])) {
                     $filled = false;
                     break;
                 }
             }
             if ($filled) {
-                //_('filled');
                 $filledSampleData[$sampleData->getId()] = $sampleData;
             }
         }
-        //_($filledSampleData);
 
         return $filledSampleData;
     }
@@ -511,6 +512,11 @@ class DummyRobot implements RobotInterface {
      */
     protected function chooseSampleDataToFill()
     {
+        //If I'm full, don't try to get more molecules.
+        if ($this->isStorageFull()) {
+            return array();
+        }
+
         $temporaryFreeSlotStorage = $this->getFreeSlotsStorage();
         $sampleDataToFill = array();
         foreach ($this->getSelfCarriedSampleData() as $sampleData) {
@@ -522,7 +528,7 @@ class DummyRobot implements RobotInterface {
             $fillable = true;
             $totalRemainingCost = 0;
             foreach ($sampleData->getCosts() as $molecule => $cost) {
-                $remainingCost = $cost - $this->storages[$molecule];
+                $remainingCost = $cost - $this->storages[$molecule] - $this->expertises[$molecule];
                 if (!$this->enoughAvailabilities($molecule, $remainingCost)) {
                     $fillable = false;
                     break;
@@ -568,7 +574,22 @@ class DummyRobot implements RobotInterface {
     protected function isFilled(SampleDataInterface $sampleData)
     {
         foreach ($sampleData->getCosts() as $molecule => $cost) {
-            if ($this->storages[$molecule] < $cost) {
+            if ($cost > ($this->storages[$molecule] + $this->expertises[$molecule])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * @param SampleDataInterface $sampleData
+     *
+     * @return bool
+     */
+    protected function isFillable(SampleDataInterface $sampleData)
+    {
+        foreach ($sampleData->getCosts() as $molecule => $cost) {
+            if ($cost > ($this->availabilities[$molecule] + $this->storages[$molecule] + $this->expertises[$molecule])) {
                 return false;
             }
         }
