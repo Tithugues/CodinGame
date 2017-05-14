@@ -215,6 +215,8 @@ interface RobotInterface {
  * Class DummyRobot
  */
 class DummyRobot implements RobotInterface {
+    const RANK_MAX = 3;
+    const RANK_MIDDLE = 2;
     /**
      * @var string
      */
@@ -493,7 +495,7 @@ class DummyRobot implements RobotInterface {
      */
     protected function chooseRank()
     {
-        return 2;
+        return $this->getAmountOfExpertises() > 3 ? self::RANK_MAX : self::RANK_MIDDLE;
     }
 
     /**
@@ -594,6 +596,14 @@ class DummyRobot implements RobotInterface {
             }
         }
         return true;
+    }
+
+    /**
+     * @return int
+     */
+    protected function getAmountOfExpertises()
+    {
+        return array_sum($this->expertises);
     }
 }
 
