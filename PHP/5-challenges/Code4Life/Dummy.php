@@ -215,8 +215,9 @@ interface RobotInterface {
  * Class DummyRobot
  */
 class DummyRobot implements RobotInterface {
-    const RANK_MAX = 3;
+    const RANK_MIN = 1;
     const RANK_MIDDLE = 2;
+    const RANK_MAX = 3;
     /**
      * @var string
      */
@@ -337,6 +338,8 @@ class DummyRobot implements RobotInterface {
         }
 
         if (count($sampleDataToFill) === 0 && count($filledSampleData) === 0) { //If I carry some unfilled sample data and can't fill anyone.
+            _('No fillable sample data');
+            _($carriedSampleData);
             if (TARGET_DIAGNOSIS !== $this->target) {
                 return "GOTO " . TARGET_DIAGNOSIS . "\n";
             } else {
@@ -352,7 +355,7 @@ class DummyRobot implements RobotInterface {
                     if ($cost > ($this->storages[$molecule] + $this->expertises[$molecule])) {
                         if (TARGET_MOLECULES !== $this->target) {
                             return "GOTO " . TARGET_MOLECULES . "\n";
-                        } elseif ($this->enoughAvailabilities($molecule, $cost - $this->storages[$molecule] - $this->expertises[$molecule])) {
+                        } elseif ($this->moleculeFillable($molecule, $cost)) {
                             return "CONNECT " . $molecule . "\n";
                         }
                     }
@@ -495,18 +498,30 @@ class DummyRobot implements RobotInterface {
      */
     protected function chooseRank()
     {
-        return $this->getAmountOfExpertises() > 3 ? self::RANK_MAX : self::RANK_MIDDLE;
-    }
+        $amountOfExpertises = $this->getAmountOfExpertises();
+        $carriedSampleData = $this->getSelfCarriedSampleData();
 
-    /**
-     * @param string $molecule
-     * @param int $needed
-     *
-     * @return bool
-     */
-    protected function enoughAvailabilities($molecule, $needed)
-    {
-        return $this->availabilities[$molecule] >= $needed;
+        if ($amountOfExpertises === 0) {
+            if (count($carriedSampleData) === 0) {
+                return self::RANK_MIN;
+            } else {
+                return self::RANK_MIDDLE;
+            }
+        }
+
+        if ($amountOfExpertises < 3 || $this->isStorageFull()) {
+            return self::RANK_MIDDLE;
+        }
+
+
+        if ($amountOfExpertises < 10) {
+            if (count($carriedSampleData) < 2) {
+                return self::RANK_MIDDLE;
+            }
+            return self::RANK_MAX;
+        }
+
+        return self::RANK_MAX;
     }
 
     /**
@@ -530,13 +545,13 @@ class DummyRobot implements RobotInterface {
             $fillable = true;
             $totalRemainingCost = 0;
             foreach ($sampleData->getCosts() as $molecule => $cost) {
-                $remainingCost = $cost - $this->storages[$molecule] - $this->expertises[$molecule];
-                if (!$this->enoughAvailabilities($molecule, $remainingCost)) {
+                if (!$this->moleculeFillable($molecule, $cost)) {
+                    _('Sample data no fillable:');
+                    _($sampleData);
                     $fillable = false;
                     break;
-                } else {
-                    $totalRemainingCost += $remainingCost;
                 }
+                $totalRemainingCost += $cost - $this->storages[$molecule] - $this->expertises[$molecule];
             }
             if ($fillable && $totalRemainingCost <= $temporaryFreeSlotStorage) {
                 $sampleDataToFill[$sampleData->getId()] = $sampleData;
@@ -590,12 +605,17 @@ class DummyRobot implements RobotInterface {
      */
     protected function isFillable(SampleDataInterface $sampleData)
     {
+        _(__METHOD__);
+        _($sampleData);
+        $temporaryFreeSlots = $this->getFreeSlotsStorage();
         foreach ($sampleData->getCosts() as $molecule => $cost) {
-            if ($cost > ($this->availabilities[$molecule] + $this->storages[$molecule] + $this->expertises[$molecule])) {
+            if (!$this->moleculeFillable($molecule, $cost)) {
                 return false;
             }
+            $temporaryFreeSlots -= max(0, $cost - $this->expertises[$molecule] - $this->storages[$molecule]);
         }
-        return true;
+        _('Temporary free slots: ' . $temporaryFreeSlots);
+        return $temporaryFreeSlots >= 0;
     }
 
     /**
@@ -604,6 +624,24 @@ class DummyRobot implements RobotInterface {
     protected function getAmountOfExpertises()
     {
         return array_sum($this->expertises);
+    }
+
+    /**
+     * @param string $molecule
+     * @param int $needed
+     *
+     * @return bool
+     */
+    protected function moleculeFillable($molecule, $needed)
+    {
+        _(__METHOD__);
+        _($molecule);
+        _($needed);
+        _($this->availabilities[$molecule]);
+        _($this->storages[$molecule]);
+        _($this->expertises[$molecule]);
+        _($needed <= ($this->availabilities[$molecule] + $this->storages[$molecule] + $this->expertises[$molecule]));
+        return $needed <= ($this->availabilities[$molecule] + $this->storages[$molecule] + $this->expertises[$molecule]);
     }
 }
 
