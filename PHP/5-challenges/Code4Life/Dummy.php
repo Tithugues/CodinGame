@@ -303,7 +303,7 @@ class DummyRobot implements RobotInterface {
         $filledSampleData = $this->getFilledSampleData();
 
         //SAMPLES module
-        if (count($carriedSampleData) === 0 && count($chosenSampleData) === 0) {
+        if (count($carriedSampleData) === 0 && count($chosenSampleData) < 3) {
             if (TARGET_SAMPLES !== $this->target) {
                 return "GOTO " . TARGET_SAMPLES . "\n";
             } else {
@@ -501,20 +501,16 @@ class DummyRobot implements RobotInterface {
         $amountOfExpertises = $this->getAmountOfExpertises();
         $carriedSampleData = $this->getSelfCarriedSampleData();
 
-        if ($amountOfExpertises === 0) {
-            if (count($carriedSampleData) === 0) {
-                return self::RANK_MIN;
-            } else {
-                return self::RANK_MIDDLE;
-            }
+        if ($amountOfExpertises < 7) {
+            return self::RANK_MIN;
         }
 
-        if ($amountOfExpertises < 3 || $this->isStorageFull()) {
+        if ($this->isStorageFull()) {
             return self::RANK_MIDDLE;
         }
 
 
-        if ($amountOfExpertises < 10) {
+        if ($amountOfExpertises < 13) {
             if (count($carriedSampleData) < 2) {
                 return self::RANK_MIDDLE;
             }
