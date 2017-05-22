@@ -3,6 +3,10 @@
  * Bring data on patient samples from the diagnosis machine to the laboratory with enough molecules to produce medicine!
  **/
 
+/**
+ * @todo When taking molecules for many sample data, while I'm not full, check that I'm wearing enough for many of them.
+ */
+
 define('DEBUG', true);
 
 /**
@@ -28,14 +32,14 @@ interface SampleDataInterface {
     /**
      * SampleData constructor.
      *
-     * @param int $id
-     * @param int $carriedBy
-     * @param int $rank
-     * @param int $expertiseGain
-     * @param int $health
-     * @param int[] $costs
+     * @param int    $id
+     * @param int    $carriedBy
+     * @param int    $rank
+     * @param string $gain
+     * @param int    $health
+     * @param int[]  $costs
      */
-    public function __construct($id, $carriedBy, $rank, $expertiseGain, $health, $costs);
+    public function __construct($id, $carriedBy, $rank, $gain, $health, $costs);
 
     /**
      * @return int
@@ -46,6 +50,11 @@ interface SampleDataInterface {
      * @return int
      */
     public function getCarriedBy();
+
+    /**
+     * @return string Expertise won by completing this sample data
+     */
+    public function getGain();
 
     /**
      * @return int
@@ -86,8 +95,8 @@ class SampleData implements SampleDataInterface {
     /** @var int */
     protected $rank;
 
-    /** @var int */
-    protected $expertiseGain;
+    /** @var string */
+    protected $gain;
 
     /** @var int */
     protected $health;
@@ -98,19 +107,19 @@ class SampleData implements SampleDataInterface {
     /**
      * SampleData constructor.
      *
-     * @param int $id
-     * @param int $carriedBy
-     * @param int $rank
-     * @param int $expertiseGain
-     * @param int $health
-     * @param int[] $costs
+     * @param int    $id
+     * @param int    $carriedBy
+     * @param int    $rank
+     * @param string $gain
+     * @param int    $health
+     * @param int[]  $costs
      */
-    public function __construct($id, $carriedBy, $rank, $expertiseGain, $health, $costs)
+    public function __construct($id, $carriedBy, $rank, $gain, $health, $costs)
     {
         $this->id = $id;
         $this->carriedBy = $carriedBy;
         $this->rank = $rank;
-        $this->expertiseGain = $expertiseGain;
+        $this->gain = $gain;
         $this->health = $health;
         $this->costs = $costs;
     }
@@ -129,6 +138,14 @@ class SampleData implements SampleDataInterface {
     public function getCarriedBy()
     {
         return $this->carriedBy;
+    }
+
+    /**
+     * @return string Expertise won by completing this sample data
+     */
+    public function getGain()
+    {
+        return $this->gain;
     }
 
     /**
@@ -302,8 +319,13 @@ class DummyRobot implements RobotInterface {
         $sampleDataToFill = $this->chooseSampleDataToFill();
         $filledSampleData = $this->getFilledSampleData();
 
+        //LABORATORY module
+        if (count($filledSampleData) !== 0 && TARGET_LABORATORY === $this->target) {
+            return "CONNECT " . reset($filledSampleData)->getId() . "\n";
+        }
+
         //SAMPLES module
-        if (count($carriedSampleData) === 0 && count($chosenSampleData) < 3) {
+        if (count($carriedSampleData) === 0 && count($chosenSampleData) <= 1) {
             if (TARGET_SAMPLES !== $this->target) {
                 return "GOTO " . TARGET_SAMPLES . "\n";
             } else {
@@ -332,7 +354,7 @@ class DummyRobot implements RobotInterface {
             }
         } elseif (count($carriedSampleData) < 3
             && TARGET_DIAGNOSIS === $this->target
-            && count($chosenSampleData) !== 0
+            && count($chosenSampleData) > 1
         ) { //If I carry less than 3 sample data, I'm to DIAGNOSIS module and I found a fillable sample data.
             return "CONNECT " . reset($chosenSampleData)->getId() . "\n";
         }
@@ -349,16 +371,21 @@ class DummyRobot implements RobotInterface {
 
         //MOLECULES module
         if (count($sampleDataToFill) !== 0) {
-            foreach ($sampleDataToFill as $sampleData) {
-                $costs = $sampleData->getCosts();
-                foreach ($costs as $molecule => $cost) {
-                    if ($cost > ($this->storages[$molecule] + $this->expertises[$molecule])) {
-                        if (TARGET_MOLECULES !== $this->target) {
-                            return "GOTO " . TARGET_MOLECULES . "\n";
-                        } elseif ($this->moleculeFillable($molecule, $cost)) {
-                            return "CONNECT " . $molecule . "\n";
-                        }
-                    }
+            _(__LINE__);
+            _($sampleDataToFill);
+            $moleculesToTake = $this->getMoleculesToTake($filledSampleData, $sampleDataToFill);
+            _($moleculesToTake);
+            foreach ($moleculesToTake as $molecule => $nb) {
+                if (0 === $nb) {
+                    //Don't need this molecule.
+                    continue;
+                }
+                if (TARGET_MOLECULES !== $this->target) {
+                    return "GOTO " . TARGET_MOLECULES . "\n";
+                }
+
+                if ($this->availabilities[$molecule] > 0) {
+                    return "CONNECT " . $molecule . "\n";
                 }
             }
         }
@@ -367,8 +394,6 @@ class DummyRobot implements RobotInterface {
         if (count($filledSampleData) !== 0) {
             if (TARGET_LABORATORY !== $this->target) {
                 return "GOTO " . TARGET_LABORATORY . "\n";
-            } else {
-                return "CONNECT " . reset($filledSampleData)->getId() . "\n";
             }
         }
 
@@ -501,16 +526,19 @@ class DummyRobot implements RobotInterface {
         $amountOfExpertises = $this->getAmountOfExpertises();
         $carriedSampleData = $this->getSelfCarriedSampleData();
 
-        if ($amountOfExpertises < 7) {
+        if ($amountOfExpertises < 3) {
             return self::RANK_MIN;
         }
 
-        if ($this->isStorageFull()) {
-            return self::RANK_MIDDLE;
+        if ($amountOfExpertises < 6) {
+            if (count($carriedSampleData) < 2) {
+                return self::RANK_MIN;
+            } else {
+                return self::RANK_MIDDLE;
+            }
         }
 
-
-        if ($amountOfExpertises < 13) {
+        if ($this->isStorageFull() || $amountOfExpertises < 11) {
             if (count($carriedSampleData) < 2) {
                 return self::RANK_MIDDLE;
             }
@@ -530,10 +558,23 @@ class DummyRobot implements RobotInterface {
             return array();
         }
 
+        $storages = $this->storages;
+        $expertises = $this->expertises;
+
         $temporaryFreeSlotStorage = $this->getFreeSlotsStorage();
         $sampleDataToFill = array();
         foreach ($this->getSelfCarriedSampleData() as $sampleData) {
-            if ($this->isFilled($sampleData)) {
+            if (!$sampleData->isDiagnosed()) {
+                continue;
+            }
+            _(__LINE__);
+            _($sampleData);
+            if ($this->isFilled($sampleData, $storages, $expertises)) {
+                _('Filled');
+                foreach ($sampleData->getCosts() as $molecule => $cost) {
+                    $storages[$molecule] -= $cost - $expertises[$molecule];
+                }
+                ++$expertises[$sampleData->getGain()];
                 //If I already have all molecules for this sample data, ignore it.
                 continue;
             }
@@ -541,18 +582,25 @@ class DummyRobot implements RobotInterface {
             $fillable = true;
             $totalRemainingCost = 0;
             foreach ($sampleData->getCosts() as $molecule => $cost) {
-                if (!$this->moleculeFillable($molecule, $cost)) {
+                if (!$this->moleculeFillable($molecule, $cost, $this->availabilities, $storages, $expertises)) {
                     _('Sample data no fillable:');
                     _($sampleData);
+                    _('Because of molecule: ' . $molecule);
                     $fillable = false;
                     break;
                 }
-                $totalRemainingCost += $cost - $this->storages[$molecule] - $this->expertises[$molecule];
+                $totalRemainingCost += $cost - $storages[$molecule] - $expertises[$molecule];
             }
             if ($fillable && $totalRemainingCost <= $temporaryFreeSlotStorage) {
+                _('Fillable');
                 $sampleDataToFill[$sampleData->getId()] = $sampleData;
                 $temporaryFreeSlotStorage -= $totalRemainingCost;
+                foreach ($sampleData->getCosts() as $molecule => $cost) {
+                    $storages[$molecule] -= $cost - $expertises[$molecule];
+                }
+                ++$expertises[$sampleData->getGain()];
             }
+            _('Final');
         }
         return $sampleDataToFill;
     }
@@ -584,10 +632,10 @@ class DummyRobot implements RobotInterface {
      *
      * @return bool
      */
-    protected function isFilled(SampleDataInterface $sampleData)
+    protected function isFilled(SampleDataInterface $sampleData, $storages, $expertises)
     {
         foreach ($sampleData->getCosts() as $molecule => $cost) {
-            if ($cost > ($this->storages[$molecule] + $this->expertises[$molecule])) {
+            if ($cost > ($storages[$molecule] + $expertises[$molecule])) {
                 return false;
             }
         }
@@ -601,16 +649,13 @@ class DummyRobot implements RobotInterface {
      */
     protected function isFillable(SampleDataInterface $sampleData)
     {
-        _(__METHOD__);
-        _($sampleData);
         $temporaryFreeSlots = $this->getFreeSlotsStorage();
         foreach ($sampleData->getCosts() as $molecule => $cost) {
-            if (!$this->moleculeFillable($molecule, $cost)) {
+            if (!$this->moleculeFillable($molecule, $cost, $this->availabilities, $this->storages, $this->expertises)) {
                 return false;
             }
             $temporaryFreeSlots -= max(0, $cost - $this->expertises[$molecule] - $this->storages[$molecule]);
         }
-        _('Temporary free slots: ' . $temporaryFreeSlots);
         return $temporaryFreeSlots >= 0;
     }
 
@@ -628,16 +673,56 @@ class DummyRobot implements RobotInterface {
      *
      * @return bool
      */
-    protected function moleculeFillable($molecule, $needed)
+    protected function moleculeFillable($molecule, $needed, $availabilities, $storages, $expertises)
     {
-        _(__METHOD__);
-        _($molecule);
-        _($needed);
-        _($this->availabilities[$molecule]);
-        _($this->storages[$molecule]);
-        _($this->expertises[$molecule]);
-        _($needed <= ($this->availabilities[$molecule] + $this->storages[$molecule] + $this->expertises[$molecule]));
-        return $needed <= ($this->availabilities[$molecule] + $this->storages[$molecule] + $this->expertises[$molecule]);
+        return $needed <= ($availabilities[$molecule] + $storages[$molecule] + $expertises[$molecule]);
+    }
+
+    /**
+     * @param SampleDataInterface[] $filledSampleData
+     * @param SampleDataInterface[] $sampleDataToFill
+     *
+     * @return int[]
+     */
+    protected function getMoleculesToTake($filledSampleData, $sampleDataToFill)
+    {
+        $storages = $this->storages;
+        $expertises = $this->expertises;
+        $availabilities = $this->availabilities;
+
+        $moleculesToTake = array('A' => 0, 'B' => 0, 'C' => 0, 'D' => 0, 'E' => 0);
+
+        foreach ($filledSampleData as $sampleData) {
+            $costs = $sampleData->getCosts();
+            foreach ($costs as $molecule => $cost) {
+                $gaveToLab = $cost - $expertises[$molecule];
+                if ($gaveToLab > 0) {
+                    $storages[$molecule] -= $gaveToLab;
+                }
+            }
+            ++$expertises[$sampleData->getGain()];
+        }
+
+        _(__LINE__ . ' Remaining storages:');
+        _($storages);
+
+        foreach ($sampleDataToFill as $sampleData) {
+            _(__LINE__ . ': Sample data to fill:');
+            _($sampleData);
+            $costs = $sampleData->getCosts();
+            foreach ($costs as $molecule => $cost) {
+                $needed = $cost - $expertises[$molecule] - $storages[$molecule];
+                _('Needed ' . $needed . ' molecules of ' . $molecule);
+                if ($needed > 0) {
+                    $moleculesToTake[$molecule] += $needed;
+                    $storages[$molecule] += $needed;
+                    $availabilities[$molecule] -= $needed;
+                }
+            }
+            ++$expertises[$sampleData->getGain()];
+        }
+
+        return $moleculesToTake;
     }
 }
 
