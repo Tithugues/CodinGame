@@ -19,6 +19,18 @@ define('THRUST_BOOST', 'BOOST');
 define('THRUST_BOOST_REAL_POWER', 650);
 define('THRUST_BOOST_UNAVAILABLE', 100);
 define('MAX_ROTATION', 18);
+
+define('CHECKPOINT_RAYON', 600);
+
+define('POD_TIMEOUT', 100);
+
+define('SOLUTION_GENERATION_NUMBER_SOLUTIONS', 4);
+define('SOLUTION_GENERATION_NUMBER_TURNS', 6);
+define('SOLUTION_GENERATION_TARGET_FACTOR', 10000);
+
+define('SCORE_VALIDATED_CHECKPOINTS', 1000);
+define('SCORE_FINISH', 999999999);
+define('SCORE_TIMEOUT', -SCORE_FINISH);
 //endregion
 
 final class Coordinates
@@ -65,7 +77,11 @@ final class Answer implements OneAnswerInterface
         $this->x = $x;
         $this->y = $y;
         $this->thrust = $thrust;
-        $this->comment = $comment;
+        if (null !== $comment) {
+            $this->comment = $comment;
+        } else {
+            $this->comment = $x . ' ' . $y . ' ' . $thrust;
+        }
     }
 
     public function echo(): void
@@ -102,54 +118,56 @@ final class AnswersComposite implements AnswerInterface
 
 interface PodInterface
 {
+    public function __construct();
     public function setState(
         Coordinates $coordinates,
-        int $speedX,
-        int $speedY,
-        int $angle,
+        float $speedX,
+        float $speedY,
+        float $angle,
         int $nextCheckpointId
     ): self;
 
-    /**
-     * @return Coordinates
-     * @throws RuntimeException If current coordinates not yet initialized.
-     */
-    public function getCurrentCoordinates(): Coordinates;
-    public function getPreviousCoordinates(): Coordinates;
-    public function getSpeedX(): int;
-    public function getSpeedY(): int;
-    public function getAngle(): int;
-    public function getNextCheckpointId(): int;
     public function useShield(): self;
-    public function getShieldEffectEnd(): int;
     public function useBoost(): self;
-    public function isBoostAvailable(): bool;
+    public function play(MoveInterface $move): self;
+    public function score(): int;
+    public function getNextCheckpointId(): int;
+    public function getCurrentCoordinates(): Coordinates;
+    public function getAngle(): float;
+    public function getSpeedX(): float;
+    public function getSpeedY(): float;
 }
 
 final class Pod implements PodInterface
 {
+    private $remainingCheckpoints;
+    private $timeout = POD_TIMEOUT;
+
     /** @var Coordinates */
     private $currentCoordinates;
-    /** @var Coordinates */
-    private $previousCoordinates;
-    /** @var int */
+    /** @var float */
     private $speedX;
-    /** @var int */
+    /** @var float */
     private $speedY;
     /** @var int */
-    private $nextCheckpointId;
-    /** @var int */
+    private $nextCheckpointId = 1;
+    /** @var float */
     private $angle;
     /** @var int */
     private $shieldEffectEnd = 0;
     /** @var bool */
     private $boostAvailable = true;
 
+    public function __construct()
+    {
+        $this->remainingCheckpoints = RUN_TOTAL_CHECKPOINTS_TO_VALIDATE;
+    }
+
     public function setState(
         Coordinates $coordinates,
-        int $speedX,
-        int $speedY,
-        int $angle,
+        float $speedX,
+        float $speedY,
+        float $angle,
         int $nextCheckpointId
     ): PodInterface
     {
@@ -157,44 +175,18 @@ final class Pod implements PodInterface
         $this->speedX = $speedX;
         $this->speedY = $speedY;
         $this->angle = $angle;
+
+        --$this->timeout;
+
+        if ($nextCheckpointId !== $this->nextCheckpointId) {
+            $this->reduceRemainingCheckpoints();
+        }
+
         $this->nextCheckpointId = $nextCheckpointId;
 
         $this->shieldEffectEnd > 0 && --$this->shieldEffectEnd;
 
         return $this;
-    }
-
-    public function getCurrentCoordinates(): Coordinates
-    {
-        return clone($this->currentCoordinates);
-    }
-
-    public function getPreviousCoordinates(): Coordinates
-    {
-        if (null === $this->previousCoordinates) {
-            throw new RuntimeException('Previous coordinates not yet initialized.');
-        }
-        return clone($this->previousCoordinates);
-    }
-
-    public function getSpeedX(): int
-    {
-        return $this->speedX;
-    }
-
-    public function getSpeedY(): int
-    {
-        return $this->speedY;
-    }
-
-    public function getAngle(): int
-    {
-        return $this->angle;
-    }
-
-    public function getNextCheckpointId(): int
-    {
-        return $this->nextCheckpointId;
     }
 
     public function useShield(): PodInterface
@@ -203,74 +195,153 @@ final class Pod implements PodInterface
         return $this;
     }
 
-    public function getShieldEffectEnd(): int
-    {
-        return $this->shieldEffectEnd;
-    }
-
     public function useBoost(): PodInterface
     {
         $this->boostAvailable = false;
         return $this;
     }
 
-    public function isBoostAvailable(): bool
+    public function play(MoveInterface $move): PodInterface
     {
-        return $this->boostAvailable;
+        $this->rotate($move->getTarget())
+            ->thrust($move->getThrust())
+            ->move()
+            ->end();
+
+        return $this;
+    }
+
+    public function getNextCheckpointId(): int
+    {
+        return $this->nextCheckpointId;
+    }
+
+    public function getCurrentCoordinates(): Coordinates
+    {
+        return $this->currentCoordinates;
+    }
+
+    /**
+     * @param Coordinates $target
+     *
+     * @return Pod
+     */
+    private function rotate(Coordinates $target): self
+    {
+        $this->angle = AngleManager::getAngle($this->currentCoordinates, $target);
+        return $this;
+    }
+
+    private function thrust(string $thrust): self
+    {
+        /** @var int $effectiveThrust */
+        if ($thrust === THRUST_SHIELD) {
+            $this->useShield();
+            $effectiveThrust = 0;
+        } elseif ($this->shieldEffectEnd !== 0) {
+            $effectiveThrust = 0;
+        } elseif ($thrust === THRUST_BOOST) {
+            $this->useBoost();
+            $effectiveThrust = 650;
+        } else {
+            $effectiveThrust = $thrust;
+        }
+
+        if ($this->shieldEffectEnd === 0) {
+            $this->speedX += cos(deg2rad($this->angle)) * $effectiveThrust;
+            $this->speedY += sin(deg2rad($this->angle)) * $effectiveThrust;
+        }
+
+        return $this;
+    }
+
+    private function move(): self
+    {
+        $this->currentCoordinates = new Coordinates(
+            round($this->currentCoordinates->getX() + $this->speedX),
+            round($this->currentCoordinates->getY() + $this->speedY)
+        );
+        if (DistanceManager::measure(
+                $this->currentCoordinates,
+                CheckpointsManager::getCheckpoint($this->nextCheckpointId)
+            ) <= CHECKPOINT_RAYON) {
+            $this->bumpNextCheckpointId();
+        }
+        return $this;
+    }
+
+    private function end(): self
+    {
+        $this->speedX = (int)($this->speedX * SPEED_BREAK_PER_TURN);
+        $this->speedY = (int)($this->speedY * SPEED_BREAK_PER_TURN);
+        --$this->timeout;
+        return $this;
+    }
+
+    private function reduceRemainingCheckpoints(): self
+    {
+        --$this->remainingCheckpoints;
+        $this->timeout = POD_TIMEOUT;
+        return $this;
+    }
+
+    public function score(): int
+    {
+        //TODO Add distance to next checkpoint: close gives more points than far.
+        if ($this->timeout === 0) {
+            return SCORE_TIMEOUT;
+        }
+        if ($this->remainingCheckpoints === 0) {
+            return SCORE_FINISH;
+        }
+        return (RUN_TOTAL_CHECKPOINTS_TO_VALIDATE - $this->remainingCheckpoints) * SCORE_VALIDATED_CHECKPOINTS;
+    }
+
+    private function bumpNextCheckpointId(): self
+    {
+        $this->nextCheckpointId = CheckpointsManager::getNextCheckpointId($this->nextCheckpointId);
+        return $this;
+    }
+
+    public function getAngle(): float
+    {
+        return $this->angle;
+    }
+
+    public function getSpeedX(): float
+    {
+        return $this->speedX;
+    }
+
+    public function getSpeedY(): float
+    {
+        return $this->speedY;
     }
 }
 
-interface CheckpointsManagerInterface
-{
-    public function __construct(Coordinates ...$checkpoints);
-
-    /**
-     * @return Coordinates[]
-     */
-    public function getCheckpoints(): array;
-
-    /**
-     * Return the given checkpoint
-     *
-     * @param int $id Checkpoint ID, regarding the order given calling addCheckpoint (starts to 0)
-     *
-     * @return Coordinates
-     */
-    public function getCheckpoint(int $id): Coordinates;
-
-    /**
-     * Return the checkpoint after the given checkpoint
-     *
-     * @param int $id Checkpoint ID, regarding the order given calling addCheckpoint (starts to 0)
-     *
-     * @return Coordinates
-     */
-    public function getNextCheckpoint(int $id): Coordinates;
-}
-
-final class CheckpointsManager implements CheckpointsManagerInterface
+final class CheckpointsManager
 {
     /** @var Coordinates[] Checkpoints coordinates */
-    private $checkpoints;
+    private static $checkpoints;
 
-    public function __construct(Coordinates ...$checkpoints)
+    public static function setCheckpoints(Coordinates ...$checkpoints): void
     {
-        $this->checkpoints = static::clone(...$checkpoints);
+        static::$checkpoints = static::clone(...$checkpoints);
     }
 
-    public function getCheckpoints(): array
+    public static function getCheckpoint(int $id): Coordinates
     {
-        return static::clone(...$this->checkpoints);
+        return clone(static::$checkpoints[$id]);
     }
 
-    public function getCheckpoint(int $id): Coordinates
+    public static function getNextCheckpointId(int $id): int
     {
-        return clone($this->checkpoints[$id]);
+        return ($id+1)%count(static::$checkpoints);
     }
 
-    public function getNextCheckpoint(int $id): Coordinates
+    public static function getNextCheckpoint(int $id): Coordinates
     {
-        return clone($this->checkpoints[($id+1)%count($this->checkpoints)]);
+        return clone(static::$checkpoints[static::getNextCheckpointId($id)]);
     }
 
     private static function clone(Coordinates ...$checkpoints): array
@@ -284,7 +355,7 @@ final class CheckpointsManager implements CheckpointsManagerInterface
 
 final class AngleManager
 {
-    public static function getAngle(Coordinates $start, Coordinates $end): int
+    public static function getAngle(Coordinates $start, Coordinates $end): float
     {
         $abscisse = $end->getX() - $start->getX();
         $ordonnee = $end->getY() - $start->getY();
@@ -294,36 +365,49 @@ final class AngleManager
     }
 
     /**
+     * Format an absolute angle to a signed angle
+     *
+     * @param float $angle
+     *
+     * @return float
+     */
+    public static function getSignedAngle(float $angle): float
+    {
+        return ($angle > 180) ? $angle - 360 : $angle;
+    }
+
+    /**
      * Angle should be: 0 <= $angle < 360
      *
      * @param int $angle
      *
      * @return int
      */
-    public static function sanitizeAngle(int $angle): int
+    public static function sanitizeAngle(float $angle): float
     {
-        return $angle%360;
+        while ($angle > 360) {
+            $angle -= 360;
+        }
+        while ($angle < 0) {
+            $angle += 360;
+        }
+        return $angle;
     }
 
-    public static function addAngles(int $start, int $angle): int
+    public static function addAngles(float $start, float $angle): float
     {
         return self::sanitizeAngle($start + $angle);
     }
 
-    public static function diffAngles(int $end, int $start): int
+    public static function diffAngles(float $end, int $start): float
     {
         return self::sanitizeAngle($end - $start);
     }
 }
 
-interface DistanceManagerInterface
+final class DistanceManager
 {
-    public function measure(Coordinates $p1, Coordinates $p2): int;
-}
-
-final class DistanceManager implements DistanceManagerInterface
-{
-    public function measure(Coordinates $p1, Coordinates $p2): int
+    public static function measure(Coordinates $p1, Coordinates $p2): int
     {
         $abscisse = $p1->getX() - $p2->getX();
         $ordonnee = $p1->getY() - $p2->getY();
@@ -331,580 +415,391 @@ final class DistanceManager implements DistanceManagerInterface
     }
 }
 
-interface PhysicsEngineInterface
+interface MoveInterface
 {
-    public function getNextState(PodInterface $pod, Coordinates $destination, string $thrust): PodInterface;
+    public function __construct(Coordinates $target, string $thrust);
+    public function getTarget(): Coordinates;
+    public function getThrust(): string;
 }
 
-final class DummyPhysicsEngineInterface implements PhysicsEngineInterface
+final class Move implements MoveInterface
 {
-    /** @var AngleManager */
-    private $angleManager;
+    /** @var Coordinates */
+    private $target;
+    /** @var string */
+    private $thrust;
 
-    public function __construct(AngleManager $angleManager)
+    public function __construct(Coordinates $target, string $thrust)
     {
-        $this->angleManager = $angleManager;
+        $this->target = $target;
+        $this->thrust = $thrust;
     }
 
-    /**
-     * @param PodInterface $pod
-     * @param string $thrust
-     *
-     * @return int
-     */
-    private static function getEffectiveThrust(PodInterface $pod, string $thrust): int
+    public function getTarget(): Coordinates
     {
-        if ($thrust === THRUST_SHIELD || $pod->getShieldEffectEnd() > 0) {
-            $effectiveThrust = 0;
-        } elseif ($thrust === THRUST_BOOST) {
-            if (! $pod->isBoostAvailable()) {
-                $effectiveThrust = THRUST_BOOST_UNAVAILABLE;
-            } else {
-                $effectiveThrust = THRUST_BOOST_REAL_POWER;
-            }
-        } else {
-            $effectiveThrust = $thrust;
-        }
-        return $effectiveThrust;
+        return $this->target;
     }
 
-    private static function truncate(float $val, int $f = 0): float
+    public function getThrust(): string
     {
-        if (($p = strpos($val, '.')) !== false) {
-            $val = (float) substr($val, 0, $p + 1 + $f);
-        }
-        return $val;
+        return $this->thrust;
     }
-
-    /**
-     * Here are the steps for a movement:
-     * 1: turn
-     * 2: accelerate
-     * 3: lose speed
-     *
-     * When thrust:
-     * - SHIELD: will act like "thrust=0"
-     * - BOOST: will act like "thrust=?"
-     *
-     * TODO: handle shocks
-     * TODO: detect new checkpoint ID
-     *
-     * @param PodInterface $pod
-     * @param Coordinates $destination
-     * @param string $thrust
-     *
-     * @return PodInterface
-     */
-    public function getNextState(PodInterface $pod, Coordinates $destination, string $thrust): PodInterface
-    {
-        $pod = clone($pod);
-
-        $effectiveThrust = self::getEffectiveThrust($pod, $thrust);
-        $newPodAngle = $this->getNewPodAngle($pod, $destination);
-
-        $speedXBeforeLosingSpeed = cos(deg2rad($newPodAngle)) * $effectiveThrust + $pod->getSpeedX();
-        $speedYBeforeLosingSpeed = sin(deg2rad($newPodAngle)) * $effectiveThrust + $pod->getSpeedY();
-
-        $newSpeedX = $speedXBeforeLosingSpeed * SPEED_BREAK_PER_TURN;
-        $newSpeedY = $speedYBeforeLosingSpeed * SPEED_BREAK_PER_TURN;
-
-        $newNextCheckpointId = $pod->getNextCheckpointId();
-
-        $pod->setState(new Coordinates(round($pod->getCurrentCoordinates()->getX() + $speedXBeforeLosingSpeed), round($pod->getCurrentCoordinates()->getY() + $speedYBeforeLosingSpeed)), self::truncate($newSpeedX), self::truncate($newSpeedY), $newPodAngle, $newNextCheckpointId);
-
-        _($pod);
-
-        return $pod;
-    }
-
-    /**
-     * @param PodInterface $pod
-     * @param Coordinates $destination
-     *
-     * @return int
-     */
-    private function getNewPodAngle(PodInterface $pod, Coordinates $destination): int
-    {
-        $angleNeededToReachDestination = $this->angleManager::getAngle($pod->getCurrentCoordinates(), $destination);
-        $currentPodAngle = $pod->getAngle();
-        if (-1 === $currentPodAngle) {
-            $newPodAngle = $angleNeededToReachDestination;
-        } else {
-            $angleToDestination = $this->angleManager::diffAngles($angleNeededToReachDestination, $pod->getAngle());
-            if ($angleToDestination < 0) {
-                $angleToAdd = max($angleToDestination, -18);
-            } else {
-                $angleToAdd = min($angleToDestination, 18);
-            }
-            $newPodAngle = $this->angleManager::sanitizeAngle($pod->getAngle() + $angleToAdd);
-        }
-        return $newPodAngle;
-}
 }
 
-interface RunStrategyInterface
+interface SolutionInterface
 {
-    public function __construct(CheckpointsManagerInterface $checkpointsManager, DistanceManagerInterface $distanceManager, AngleManager $angleManager, PhysicsEngineInterface $pe, PodInterface ...$pods);
+    public function addMove(MoveInterface ...$moves): self;
 
     /**
-     * @param int $index Index given in the construct
-     * @param Coordinates $coordinates
-     * @param int $speedX
-     * @param int $speedY
-     * @param int $angle
-     * @param int $nextCheckpointId
-     *
-     * @return $this
+     * @return MoveInterface[]
      */
-    public function setPodState(int $index, Coordinates $coordinates, int $speedX, int $speedY, int $angle, int $nextCheckpointId): self;
-    public function getDestinations(): AnswerInterface;
+    public function shiftMove(): array;
+    public function setPods(PodInterface ...$pods): self;
+    public function play(): self;
+    public function score(): int;
 }
 
-final class DummyRunStrategy implements RunStrategyInterface
+final class Solution implements SolutionInterface
 {
-    /** @var PodInterface[] */
-    private $allies;
-
-    /** @var PodInterface[] */
-    private $enemies;
-
-    /** @var CheckpointsManagerInterface */
-    private $checkpointsManager;
-
-    /** @var DistanceManagerInterface */
-    private $distanceManager;
-
-    /** @var AngleManager */
-    private $angleManager;
-
-    /** @var PhysicsEngineInterface */
-    private $physicsEngine;
-
-    /** @var int Last time the shield was activated */
-    private $lastShield = 4;
-
-    /**
-     * @var int
-     * @deprecated
-     */
-    private $turn = 0;
-
-    public function __construct(CheckpointsManagerInterface $checkpointsManager, DistanceManagerInterface $distanceManager, AngleManager $angleManager, PhysicsEngineInterface $pe, PodInterface ...$pods)
-    {
-        if (count($pods)%2 === 1) {
-            throw new InvalidArgumentException('There should be as much ally pods than enemy pods.');
-        }
-
-        $numberPodsByTeam = count($pods) / 2;
-        $this->checkpointsManager = $checkpointsManager;
-        $this->distanceManager = $distanceManager;
-        $this->angleManager = $angleManager;
-        $this->physicsEngine = $pe;
-        $this->allies = array_slice($pods, 0, $numberPodsByTeam, true);
-        $this->enemies = array_slice($pods, $numberPodsByTeam, $numberPodsByTeam, true);
+    use PodsManagerTrait {
+        setPods as _setPods;
     }
 
-    public function setPodState(
-        int $index,
-        Coordinates $coordinates,
-        int $speedX,
-        int $speedY,
-        int $angle,
-        int $nextCheckpointId
-    ): RunStrategyInterface
+    /** @var MoveInterface[][] */
+    private $moves = [];
+
+    public function addMove(MoveInterface ...$moves): SolutionInterface
     {
-        if (array_key_exists($index, $this->allies)) {
-            $pod = $this->allies[$index];
-        } elseif (array_key_exists($index, $this->enemies)) {
-            $pod = $this->enemies[$index];
-        } else {
-            throw new InvalidArgumentException('Non-existing given index. "' . $index . '".');
+        $this->moves[] = $moves;
+        foreach ($moves as $id => $move) {
+            $this->allies[$id]->play($move);
         }
-        $pod->setState($coordinates, $speedX, $speedY, $angle, $nextCheckpointId);
         return $this;
     }
 
-    public function getDestinations(): AnswerInterface
+    /**
+     * @return MoveInterface[]
+     */
+    public function shiftMove(): array
     {
-        foreach ($this->allies as $ally) {
-            _(
-                $ally->getCurrentCoordinates()->getX() . ',' . $ally->getCurrentCoordinates()->getY()
-                    . ' ' . $ally->getSpeedX() . '/' . $ally->getSpeedY()
-                    . ' -> ' . $ally->getAngle()
-            );
-        }
-
-        $decalage = +100000;
-        $thrusts = [1 => 'SHIELD', 2 => 'BOOST'];
-
-        $globalAnswer = new AnswersComposite();
-
-        if ($this->turn === 0) {
-            ++$this->turn;
-            $this->physicsEngine->getNextState($this->allies[0],  new Coordinates($this->allies[0]->getCurrentCoordinates()->getX() + $decalage, $this->allies[0]->getCurrentCoordinates()->getY()), $thrusts[$this->turn]);
-            $thrust = $thrusts[$this->turn];
-            if (THRUST_SHIELD === $thrust) {
-                $this->allies[0]->useShield();
-                $this->allies[1]->useShield();
-            } elseif (THRUST_BOOST === $thrust) {
-                $this->allies[0]->useBoost();
-                $this->allies[1]->useBoost();
-            }
-            return $globalAnswer->addAnswer(new Answer($this->allies[0]->getCurrentCoordinates()->getX() + $decalage, $this->allies[0]->getCurrentCoordinates()->getY(), $thrusts[$this->turn]))
-                ->addAnswer(new Answer($this->allies[1]->getCurrentCoordinates()->getX() + $decalage, $this->allies[1]->getCurrentCoordinates()->getY(), $thrusts[$this->turn]));
-        }
-
-        if ($this->turn === 1) {
-            ++$this->turn;
-            $this->physicsEngine->getNextState($this->allies[0],  new Coordinates($this->allies[0]->getCurrentCoordinates()->getX(), $this->allies[0]->getCurrentCoordinates()->getY() + $decalage), $thrusts[$this->turn]);
-            $thrust = $thrusts[$this->turn];
-            if (THRUST_SHIELD === $thrust) {
-                $this->allies[0]->useShield();
-                $this->allies[1]->useShield();
-            } elseif (THRUST_BOOST === $thrust) {
-                $this->allies[0]->useBoost();
-                $this->allies[1]->useBoost();
-            }
-            return $globalAnswer->addAnswer(new Answer($this->allies[0]->getCurrentCoordinates()->getX(), $this->allies[0]->getCurrentCoordinates()->getY() + $decalage, $thrusts[$this->turn]))
-                ->addAnswer(new Answer($this->allies[1]->getCurrentCoordinates()->getX(), $this->allies[1]->getCurrentCoordinates()->getY() + $decalage, $thrusts[$this->turn]));
-        }
-
-        throw new Exception('temporary exception');
-
-        $numberPodsByGroup = count($this->allies)/2;
-
-        foreach (array_slice($this->allies, 0, $numberPodsByGroup, true) as $index => $ally) {
-            $globalAnswer->addAnswer($podAnswer = $this->getDestinationForRunner($index));
-            $thrust = $podAnswer->getThrust();
-            if (THRUST_SHIELD === $thrust) {
-                $ally->useShield();
-            } elseif (THRUST_BOOST === $thrust) {
-                $ally->useBoost();
-            }
-        }
-        foreach (array_slice($this->allies, $numberPodsByGroup, $numberPodsByGroup, true) as $index => $ally) {
-            $globalAnswer->addAnswer($podAnswer = $this->getDestinationForKicker($index));
-            $thrust = $podAnswer->getThrust();
-            if (THRUST_SHIELD === $thrust) {
-                $ally->useShield();
-            } elseif (THRUST_BOOST === $thrust) {
-                $ally->useBoost();
-            }
-        }
-        return $globalAnswer;
+        return array_shift($this->moves);
     }
 
-    private function getDestinationForRunner(int $podIndex): OneAnswerInterface
+    public function setPods(PodInterface ...$pods): SolutionInterface
     {
-        $pod = $this->allies[$podIndex];
-
-        $thrust = null;
-        $allyCoordinates = $pod->getCurrentCoordinates();
-        $checkpointCoordinates = $this->checkpointsManager->getCheckpoints()[$pod->getNextCheckpointId()];
-        $myDist = $this->distanceManager->measure(
-            $pod->getCurrentCoordinates(),
-            $this->checkpointsManager->getCheckpoint($pod->getNextCheckpointId())
-        );
-        $myAngleToCheckpoint = $this->angleManager::getAngle(
-            $pod->getCurrentCoordinates(),
-            $this->checkpointsManager->getCheckpoint($pod->getNextCheckpointId())
-        );
-
-        $currentMovementAngle = $this->getMovementAngle($pod);
-        $allySpeed = $this->getSpeed($pod);
-        $enemySpeed = $this->getSpeed($this->enemies[2]);
-        _('SPEED: ' . $allySpeed);
-        $angleToReachCheckpoint = $this->angleManager::getAngle($allyCoordinates, $checkpointCoordinates);
-        $myAngle = $this->angleManager::addAngles($angleToReachCheckpoint, $myAngleToCheckpoint);
-
-        $abscisse = $checkpointCoordinates->getX() - $allyCoordinates->getX();
-        $ordonnee = $checkpointCoordinates->getY() - $allyCoordinates->getY();
-        $hyp = sqrt(($abscisse ** 2) + ($ordonnee ** 2));
-        $facteur = ($hyp - 300) / $hyp;
-        $destAbscisse = $abscisse * $facteur;
-        $destOrdonnee = $ordonnee * $facteur;
-
-        try {
-            if ($this->lastShield < 3) {
-                throw new RuntimeException('Shield activated ' . $this->lastShield . ' turn(s) ago.');
-            }
-            $distBetweenPodsIn1Step = $this->distanceManager->measure(
-                $allyNextCoordinates = $this->calculateNextCoordinates($pod, 1),
-                $enemyNextCoordinates = $this->calculateNextCoordinates($this->enemies[2], 1)
-            );
-            _('Ally next coordinates: ');
-            _($allyNextCoordinates);
-            _('Enemy next coordinates: ');
-            _($enemyNextCoordinates);
-            $ecartPodsMovementAngle = $this->angleManager::diffAngles($currentMovementAngle, $this->getMovementAngle($this->enemies[2]));
-            $anglePods = $this->angleManager::getAngle($this->enemies[2]->getCurrentCoordinates(), $pod->getCurrentCoordinates());
-            $ecartPodsAngleMyAngle = $this->angleManager::diffAngles($anglePods, $myAngle);
-            $enemyIsBehindAlly = abs($ecartPodsAngleMyAngle) < 45;
-            $ecartReversePodsAngleMyAngle = $this->angleManager::diffAngles($this->angleManager::addAngles($anglePods, 180), $myAngle);
-            $allyIsBehindEnemy = abs($ecartReversePodsAngleMyAngle) < 45;
-            _('$allySpeed: ' . $allySpeed);
-            _('$enemySpeed: ' . $enemySpeed);
-            _('$ecartPodsAngleMyAngle: ' . $ecartPodsAngleMyAngle);
-            _('$ecartReversePodsAngleMyAngle: ' . $ecartReversePodsAngleMyAngle);
-            _('$ecartPodsMovementAngle: ' . $ecartPodsMovementAngle);
-            _('$enemyIsBehindAlly: ' . (int)$enemyIsBehindAlly);
-            _('$allyIsBehindEnemy: ' . (int)$allyIsBehindEnemy);
-            _('Distance in 1 step: ' . $distBetweenPodsIn1Step);
-            if ($distBetweenPodsIn1Step < 750 && $enemySpeed > 300
-                && (
-                    //
-                    (!$enemyIsBehindAlly && abs($ecartPodsMovementAngle) > 45)
-                    || ($allyIsBehindEnemy && abs($ecartPodsMovementAngle) < 45)
-                )
-            ) {
-                $this->lastShield = 0;
-                return new Answer(
-                    $allyCoordinates->getX() + round($destAbscisse),
-                    $allyCoordinates->getY() + round($destOrdonnee),
-                    THRUST_SHIELD
-                );
-            }
-            $distBetweenPodsIn2Steps = $this->distanceManager->measure(
-                $allyCoordinatesIn2Steps = $this->calculateNextCoordinates($pod, 2),
-                $enemyCoordinatesIn2Steps = $this->calculateNextCoordinates($this->enemies[2], 2)
-            );
-            _('Distance in 2 steps: ' . $distBetweenPodsIn2Steps);
-            if ($distBetweenPodsIn2Steps < 800 && $enemySpeed > 300 && abs($ecartPodsAngleMyAngle) > 45 && abs($ecartPodsMovementAngle) > 45) {
-                _('Will shield on next turn.');
-                //Se tourner vers l'ennemi et accélérer.
-                return new Answer(
-                    $enemyCoordinatesIn2Steps->getX() * 2 - $allyCoordinatesIn2Steps->getX(),
-                    $enemyCoordinatesIn2Steps->getY() * 2 - $allyCoordinatesIn2Steps->getY(),
-                    '100'
-                );
-            }
-        } catch (RuntimeException $e) {
-            _($e->getMessage());
-        }
-
-        if (null !== $currentMovementAngle) {
-            $ecartAngleToReachTarget = $this->angleManager::diffAngles($angleToReachCheckpoint, $currentMovementAngle);
-            $angleToTarget = null;
-
-            //Si l'angle du mouvement n'est pas assez proche de l'angle nécessaire pour arriver à destination,
-            //alors il faut donner au pod un angle pour compenser.
-            if (abs($ecartAngleToReachTarget) > 90) {
-                if ($allySpeed > 200) {
-                    _('> 90');
-                    //Target median between checkpoint and opposite of movement.
-                    $oppositeAngleToMovement = $this->angleManager::addAngles($currentMovementAngle, 180);
-                    _('ANGLE OPPOSITE TO MOVEMENT: ' . $oppositeAngleToMovement);
-                    $ecartAngleOppositeCheckpoint = $this->angleManager::diffAngles(
-                        $angleToReachCheckpoint,
-                        $oppositeAngleToMovement
-                    );
-                    _('ANGLE BETWEEN OPPOSITE AND CP: ' . $ecartAngleOppositeCheckpoint);
-                    $angleToTarget = $this->angleManager::addAngles(
-                        $oppositeAngleToMovement,
-                        (int) ($ecartAngleOppositeCheckpoint / 1.3)
-                    );
-                    _('PRE-COMPENSATION: ' . $angleToTarget);
-
-                    $ecartAnglePodMovement = $this->angleManager::diffAngles($currentMovementAngle, $myAngle);
-                    if ($ecartAnglePodMovement > 0) {
-                        $angleToTarget = $this->angleManager::addAngles($angleToTarget, +1);
-                    } else {
-                        $angleToTarget = $this->angleManager::addAngles($angleToTarget, -1);
-                    }
-                    _('POST-COMPENSATION: ' . $angleToTarget);
-                }
-
-            } else {
-                _('<= 90');
-                $angleToTarget = $this->angleManager::addAngles($angleToReachCheckpoint, round($ecartAngleToReachTarget/1.4));
-            }
-
-            _('POD ABSOLUTE ANGLE: ' . $myAngle);
-            _('MOUVEMENT: ' . $currentMovementAngle);
-            _('TARGET: ' . $angleToReachCheckpoint);
-            _('ECART MOUVEMENT/TARGET: ' . $ecartAngleToReachTarget);
-            _('COMPENSATION: ' . $angleToTarget);
-            if (null !== $angleToTarget) {
-                $destAbscisse = cos(deg2rad($angleToTarget)) * $myDist;
-                $destOrdonnee = sin(deg2rad($angleToTarget)) * $myDist;
-                _('New abscisse: ' . $destAbscisse);
-                _('New ordonnee: ' . $destOrdonnee);
-                //$thrust = 100 - min(50, round(abs($myAngleToCheckpoint/2)));
-            }
-        }
-
-        if (null === $thrust) {
-            if ($myDist > 6000 && abs($myAngleToCheckpoint) < 15 && $pod->isBoostAvailable()) {
-                $thrust = THRUST_BOOST;
-            } elseif ($allySpeed > 400 && abs($myAngleToCheckpoint) > 135) {
-                $thrust = 0;
-            } elseif (abs($myAngleToCheckpoint) > 90) {
-                $thrust = 60;
-            /*} elseif (abs($myAngleToCheckpoint) > 70) {
-                $thrust = 65;*/
-            } elseif ($allySpeed < 250) {
-                $thrust = 100;
-            } else {
-                /*if ($myDist < 1500) {
-                    $thrust = 30;
-                } else*/
-                if ($myDist < 1400) {
-                    $thrust = 45;
-                } elseif ($myDist < 2000) {
-                    $thrust = 70;
-                } else {
-                    $thrust = 100;
-                }
-            }
-        }
-
-        return new Answer(
-            $allyCoordinates->getX() + round($destAbscisse),
-            $allyCoordinates->getY() + round($destOrdonnee),
-            $thrust
-        );
+        return $this->_setPods(...$this->clonePods(...$pods));
     }
 
-    private function getDestinationForKicker(int $podIndex): OneAnswerInterface
+    public function play(): SolutionInterface
     {
-        $pod = $this->allies[$podIndex];
-
-        $closestEnemy = null;
-        $closestEnemyDistance = null;
-        foreach ($this->enemies as $enemy) {
-            $distance = $this->distanceManager->measure($pod->getCurrentCoordinates(), $enemy->getCurrentCoordinates());
-            if (null === $closestEnemy || $distance < $closestEnemyDistance) {
-                $closestEnemy = $enemy;
-                $closestEnemyDistance = $distance;
+        foreach ($this->moves as $moves) {
+            foreach ($moves as $podIndex => $move) {
+                $this->allies[$podIndex]->play($move);
             }
         }
 
-        return new Answer(
-            $closestEnemy->getCurrentCoordinates()->getX(),
-            $closestEnemy->getCurrentCoordinates()->getY(),
-            100
-        );
+        return $this;
+    }
+
+    public function score(): int
+    {
+        $alliesScores = array_map(static function (PodInterface $pod) { return $pod->score(); }, $this->allies);
+        $enemiesScores = array_map(static function (PodInterface $pod) { return $pod->score(); }, $this->enemies);
+
+        return max($alliesScores) - max($enemiesScores);
+    }
+}
+
+trait PodsManagerTrait
+{
+    /** @var PodInterface[] */
+    private $allies = [];
+    /** @var PodInterface[] */
+    private $enemies = [];
+
+    private function setPods(PodInterface ...$pods): self
+    {
+        $nbPodsByTeam = count($pods)/2;
+        $this->allies = array_slice($pods, 0, $nbPodsByTeam, false);
+        $this->enemies = array_slice($pods, $nbPodsByTeam, $nbPodsByTeam, false);
+        return $this;
+    }
+
+    private function getPods(): array
+    {
+        return array_merge($this->allies, $this->enemies);
     }
 
     /**
-     * @param PodInterface $pod
-     * @param int $turns
-     * @param int $power
+     * @param PodInterface[] $pods
      *
-     * @return Coordinates
-     * @deprecated
+     * @return PodInterface[]
      */
-    public function calculateNextCoordinates(PodInterface $pod, int $turns, int $power = 100): Coordinates
+    private function clonePods(PodInterface ...$pods): array
     {
-        if (0 >= $turns) {
-            throw new InvalidArgumentException('"turns" should be > 0.');
+        return array_map(
+            static function (PodInterface $pod) {
+                return clone($pod);
+            },
+            array_merge($pods)
+        );
+    }
+}
+
+interface SolutionGeneratorInterface
+{
+    public function setPods(PodInterface ...$pods): SolutionGeneratorInterface;
+    public function generate(): SolutionInterface;
+    public function fillSolution(SolutionInterface $solution): SolutionInterface;
+}
+
+final class DummySolutionGenerator implements SolutionGeneratorInterface
+{
+    use PodsManagerTrait {
+        setPods as _setPods;
+    }
+
+    public function setPods(PodInterface ...$pods): SolutionGeneratorInterface
+    {
+        return $this->_setPods(...$pods);
+    }
+
+    public function generate(): SolutionInterface
+    {
+        $solution = (new Solution())->setPods(...$this->getPods());
+        return $this->generateTurns($solution, SOLUTION_GENERATION_NUMBER_TURNS);
+    }
+
+    public function fillSolution(SolutionInterface $solution): SolutionInterface
+    {
+        $solution->setPods(...$this->clonePods(...$this->getPods()))->play();
+        return $this->generateTurns($solution, 1);
+    }
+
+    private function generateTurns(SolutionInterface $solution, int $numberTurnsToGenerate): SolutionInterface
+    {
+        if (0 === $numberTurnsToGenerate) {
+            return $solution;
         }
 
-        $pod = clone($pod);
+        $move0 = $this->generateMove($this->allies[0]);
+        $move1 = $this->generateMove($this->allies[1]);
+        $solution->addMove($move0, $move1);
 
-        $movementAngle = $this->getMovementAngle($pod);
-        $speed = $this->getSpeed($pod);
-
-        return $this->calculateCoordinates($pod->getCurrentCoordinates(), $movementAngle, $speed, $turns, $power);
+        return $this->generateTurns($solution, --$numberTurnsToGenerate);
     }
 
-    /**
-     * @param Coordinates $point
-     * @param int $movementAngle
-     * @param int $speed
-     * @param int $turns
-     * @param int $power
-     *
-     * @return Coordinates
-     * @deprecated
-     */
-    private function calculateCoordinates(Coordinates $point, int $movementAngle, int $speed, int $turns, int $power = 100): Coordinates
+    private function angleLimiter(float $angle): float
     {
-        if ($turns === 0) {
-            return $point;
+        if ($angle > MAX_ROTATION) {
+            return MAX_ROTATION;
         }
 
-        $newSpeed = $speed*SPEED_BREAK_PER_TURN + $power;
-        _('new speed: ' . $newSpeed);
-        _('Decalage X: ' . cos(deg2rad($movementAngle))*$newSpeed);
-        _('Decalage Y: ' . sin(deg2rad($movementAngle))*$newSpeed);
-
-        return $this->calculateCoordinates(new Coordinates(
-            round($point->getX() + cos(deg2rad($movementAngle))*$newSpeed),
-            round($point->getY() + sin(deg2rad($movementAngle))*$newSpeed)
-        ), $movementAngle, round($newSpeed), --$turns, $power);
-    }
-
-    /**
-     * @param PodInterface $pod
-     *
-     * @return int
-     * @deprecated
-     */
-    public function getMovementAngle(PodInterface $pod): int
-    {
-        return $this->calculateMovementAngle($pod);
-    }
-
-    /**
-     * @param PodInterface $pod
-     *
-     * @return int|null
-     * @deprecated
-     */
-    private function calculateMovementAngle(PodInterface $pod): int
-    {
-        try {
-            $angle = $this->angleManager::getAngle(
-                $pod->getPreviousCoordinates(),
-                $pod->getCurrentCoordinates()
-            );
-        } catch (RuntimeException $e) {
-            $angle = 0;
+        if ($angle < -MAX_ROTATION) {
+            return -MAX_ROTATION;
         }
 
         return $angle;
     }
 
+    private function getMovementAngle(PodInterface $pod): float
+    {
+        $hyp = sqrt($pod->getSpeedX()**2 + $pod->getSpeedY()**2);
+        if ($hyp === 0.0) {
+            return $pod->getSpeedX() < 0 ? 180 : 0;
+        }
+        $angle = rad2deg(acos($pod->getSpeedX() / $hyp));
+        return rad2deg(asin($pod->getSpeedY() / $hyp)) > 1 ? $angle : -$angle;
+    }
+
     /**
      * @param PodInterface $pod
      *
-     * @return int
-     * @deprecated
+     * @return MoveInterface
+     * @throws Exception
      */
-    public function getSpeed(PodInterface $pod): int
+    private function generateMove(PodInterface $pod): MoveInterface
     {
-        return round(sqrt($pod->getSpeedX()**2 + $pod->getSpeedY()**2));
+        $nextCP = CheckpointsManager::getCheckpoint($pod->getNextCheckpointId());
+        $angleToTarget = AngleManager::getSignedAngle(AngleManager::getAngle($pod->getCurrentCoordinates(), $nextCP));
+        _('$angleToTarget: ' . $angleToTarget);
+        $distToTarget = DistanceManager::measure($pod->getCurrentCoordinates(), $nextCP);
+        _('$distToTarget: ' . $distToTarget);
+
+        _('My Angle: ' . AngleManager::getSignedAngle($pod->getAngle()));
+        if ($pod->getAngle() === -1.0) {
+            $rotation = $angleToTarget;
+            $diffAngleToTarget = 0;
+        } else {
+            $diffAngleToTarget = AngleManager::getSignedAngle(AngleManager::diffAngles($angleToTarget, $pod->getAngle()));
+            _('$diffAngleToTarget: ' . $diffAngleToTarget);
+
+            $movementAngle = AngleManager::getSignedAngle($this->getMovementAngle($pod));
+            _('$movementAngle: ' . $movementAngle);
+
+            $diffMovementTargetAngles = AngleManager::getSignedAngle(AngleManager::diffAngles($angleToTarget, $movementAngle));
+            _('$diffMovementTargetAngles: ' . $diffMovementTargetAngles);
+            if (abs($diffMovementTargetAngles) > 45) {
+                _('Premier if');
+                $rotation = $diffAngleToTarget > 0 ? MAX_ROTATION : -MAX_ROTATION;
+            } elseif (abs($diffAngleToTarget) <= MAX_ROTATION) {
+                _('Deuxième if');
+                $rotation = $diffMovementTargetAngles;
+                _('rotation temp: ' . $rotation);
+                $rotation = random_int($this->angleLimiter($rotation-5), $this->angleLimiter($rotation+5));
+            } else {
+                _('Troisième if');
+                $rotation = ($diffAngleToTarget >= 0) ? MAX_ROTATION : -MAX_ROTATION;
+            }
+        }
+        _('Rotation: ' . $rotation);
+
+        $newAngle = AngleManager::addAngles($pod->getAngle(), $rotation);
+        _('new angle: ' . $newAngle);
+        $target = new Coordinates(
+            $pod->getCurrentCoordinates()->getX() + cos(deg2rad($newAngle)) * SOLUTION_GENERATION_TARGET_FACTOR,
+            $pod->getCurrentCoordinates()->getY() + sin(deg2rad($newAngle)) * SOLUTION_GENERATION_TARGET_FACTOR,
+        );
+
+        if ($distToTarget > 6000 && abs($diffAngleToTarget) < 15 /*&& $pod->isBoostAvailable()*/) {
+            $thrust = THRUST_BOOST;
+        } elseif (abs($diffAngleToTarget) > 135) {
+            $thrust = random_int(0, 30);
+        } elseif (abs($diffAngleToTarget) > 90) {
+            $thrust = random_int(50, 70);
+        } else {
+            if ($distToTarget < 1400) {
+                $thrust = random_int(40, 100);
+            } elseif ($distToTarget < 2000) {
+                $thrust = random_int(60, 100);
+            } else {
+                $thrust = 100;
+            }
+        }
+
+        _('Thrust: ' . $thrust);
+
+        return new Move($target, $thrust);
+    }
+}
+
+interface SolutionManagerInterface
+{
+    public function __construct(SolutionGeneratorInterface $sg);
+
+    /**
+     * Get next move for each ally pod.
+     * @return AnswerInterface
+     */
+    public function getNextMoves(): AnswerInterface;
+}
+
+final class DummySolutionManager implements SolutionManagerInterface
+{
+    use PodsManagerTrait;
+
+    /** @var SolutionGeneratorInterface */
+    private $solutionGenerator;
+    /** @var Solution[] */
+    private $solutions = [];
+
+    public function __construct(SolutionGeneratorInterface $sg, PodInterface ...$pods)
+    {
+        $this->solutionGenerator = $sg;
+        $this->setPods(...$pods);
+    }
+
+    public function getNextMoves(): AnswerInterface
+    {
+        $this->generate();
+        $this->solutions = [$this->getBestSolution()];
+        $moves = $this->solutions[0]->shiftMove();
+        $globalAnswer = new AnswersComposite();
+        foreach ($this->allies as $allyIndex => $ally) {
+            $ally = clone($ally);
+            $ally->play($moves[$allyIndex]);
+            $globalAnswer->addAnswer(
+                new Answer(
+                    $moves[$allyIndex]->getTarget()->getX(),
+                    $moves[$allyIndex]->getTarget()->getY(),
+                    $moves[$allyIndex]->getThrust()
+                )
+            );
+        }
+        return $globalAnswer;
+    }
+
+    private function generate(): SolutionManagerInterface
+    {
+        $this->solutionGenerator->setPods(...$this->clonePods(...$this->getPods()));
+        //!empty($this->solutions) && $this->solutionGenerator->fillSolution($this->solutions[0]);
+        $this->solutions = [];
+
+        while (count($this->solutions) < SOLUTION_GENERATION_NUMBER_SOLUTIONS) {
+            $this->addSolution($this->solutionGenerator->generate());
+        }
+
+        return $this;
+    }
+
+    private function addSolution(SolutionInterface $solution): SolutionManagerInterface
+    {
+        $this->solutions[] = $solution;
+        return $this;
+    }
+
+    /**
+     * @return Solution
+     */
+    private function getBestSolution(): Solution
+    {
+        $solutionsScores = array_map(
+            static function (Solution $solution) {
+                return $solution->play()->score();
+            },
+            $this->solutions
+        );
+        arsort($solutionsScores);
+        return $this->solutions[key($solutionsScores)];
     }
 }
 
 fscanf(STDIN, '%d', $lapsNumber);
+define('RUN_NUMBER_LAPS', $lapsNumber);
 fscanf(STDIN, '%d', $checkpointsNumber);
+define('RUN_NUMBER_CHECKPOINT_BY_LAP', $checkpointsNumber);
+define('RUN_TOTAL_CHECKPOINTS_TO_VALIDATE', RUN_NUMBER_LAPS * RUN_NUMBER_CHECKPOINT_BY_LAP);
 
-/** @var Coordinates $checkpoints */
+/** @var Coordinates[] $checkpoints */
 $checkpoints = [];
 
 for ($i = 0; $i < $checkpointsNumber; ++$i) {
+    /** @var int $x Checkpoint X */
+    /** @var int $y Checkpoint Y */
     fscanf(STDIN, '%d %d', $x, $y);
     $checkpoints[] = new Coordinates($x, $y);
 }
 
-$distanceManager = new DistanceManager();
-$angleManager = new AngleManager();
-$checkpointsManager = new CheckpointsManager(...$checkpoints);
-$physicsEngine = new DummyPhysicsEngineInterface($angleManager);
-$runStrategy = new DummyRunStrategy(
-    $checkpointsManager,
-    $distanceManager,
-    $angleManager,
-    $physicsEngine,
-    new Pod(), new Pod(), //Allies
-    new Pod(), new Pod() //Enemies
-);
+CheckpointsManager::setCheckpoints(...$checkpoints);
+/** @var PodInterface[] $pods */
+$pods = [
+    //Allies
+    new Pod(),
+    new Pod(),
+    //Enemies
+    new Pod(),
+    new Pod(),
+];
+$solutionManager = new DummySolutionManager(new DummySolutionGenerator(), ...$pods);
 
 // game loop
+$turn = 0;
 while (true) {
     for ($i = 0; $i < 4; ++$i) {
+        /** @var int $speedX Pod X speed */
+        /** @var int $speedY Pod Y speed */
+        /** @var int $podAngle Pod absolute angle */
+        /** @var int $nextCheckpointId Pod next checkpoint ID */
         fscanf(
             STDIN,
             '%d %d %d %d %d %d',
@@ -915,8 +810,8 @@ while (true) {
             $podAngle,
             $nextCheckpointId
         );
-        $runStrategy->setPodState($i, new Coordinates($x, $y), $speedX, $speedY, $podAngle, $nextCheckpointId);
+        $pods[$i]->setState(new Coordinates($x, $y), $speedX, $speedY, $podAngle, $nextCheckpointId);
     }
 
-    $runStrategy->getDestinations()->echo();
+    $solutionManager->getNextMoves()->echo();
 }
