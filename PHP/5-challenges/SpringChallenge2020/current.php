@@ -17,11 +17,17 @@ function _($var, bool $force = false) {
     }
 }
 
-interface Point {
+interface Stringable
+{
+    public function __toString(): string;
+}
+
+interface Point
+{
     public function getPosition(): array;
 }
 
-interface PelletInterface extends Point
+interface PelletInterface extends Point, Stringable
 {
     public function getSize(): int;
 }
@@ -53,7 +59,7 @@ interface PelletsManagerInterface
     public function getPellets(): array;
 }
 
-interface PacmanInterface extends Point
+interface PacmanInterface extends Point, Stringable
 {
     public function getId(): int;
 
@@ -120,6 +126,11 @@ class Pellet implements PelletInterface
     public function getSize(): int
     {
         return $this->size;
+    }
+
+    public function __toString(): string
+    {
+        return $this->x . '/' . $this->y;
     }
 }
 
@@ -206,7 +217,7 @@ class Pacman implements PacmanInterface
         ];
     }
 
-    public function __toString()
+    public function __toString(): string
     {
         return (string)$this->getId();
     }
@@ -310,69 +321,46 @@ class TargetFinder implements TargetFinderInterface
 
     public function getTargets(): array
     {
+        // Firstly send the closest pacmen to super pellets
+        // Secondly send remaining pacmen to closest pellets
         $targets = [];
-        $myPacmen = $this->pacmenManager->getMyPacmen();
-        $allPellets = $this->pelletsManager->getPellets();
+        $freePacmen = $this->pacmenManager->getMyPacmen();
+        $superPellets = $this->pelletsManager->getSuperPellets();
 
-        foreach ($allPellets as $pellet) {
-            if ($myPacmen === []) {
-                _('Exit');
+        foreach ($superPellets as $superPellet) {
+            if ($freePacmen === []) {
                 break;
             }
-            _('Loop');
-            $freePacmen = $myPacmen;
-            $closestPacman = array_shift($freePacmen);
-            $closestPacmanDistance = $this->getSquareDistance($closestPacman, $pellet);
-            foreach ($freePacmen as $freePacman) {
-                if (($currentPacmanDistance = $this->getSquareDistance($freePacman, $pellet)) < $closestPacmanDistance) {
-                    $closestPacman = $freePacman;
-                    $closestPacmanDistance = $currentPacmanDistance;
-                }
+            $closestPacman = $this->getClosestPacman($superPellet, $freePacmen);
+            $freePacmen = array_diff($freePacmen, [$closestPacman]);
+            $targets[] = 'MOVE ' . $closestPacman->getId() . ' ' . implode(
+                    ' ',
+                    $superPellet->getPosition()
+                );
+        }
+        $freePellets = $this->pelletsManager->getSmallPellets();
+        foreach ($freePacmen as $pacman) {
+            try {
+                $closestPellet = $this->getClosestPellet($pacman, $freePellets);
+                $freePellets = array_diff($freePellets, [$closestPellet]);
+                $targets[] = 'MOVE ' . $pacman->getId() . ' ' . implode(' ', $closestPellet->getPosition());
+            } catch (PelletNotFoundException $e) {
+                $targets[] = 'MOVE ' . $pacman->getId() . ' ' . implode(' ', $this->getRandomPosition());
             }
-            $myPacmen = array_diff(
-                $myPacmen,
-                [$closestPacman]
-            );
-            $targets[] = 'MOVE ' . $closestPacman->getId() . ' ' . implode(' ', $pellet->getPosition());
         }
         return $targets;
     }
 
     /**
      * @param PacmanInterface $pacman
-     *
-     * @return array
-     * @throws Exception
-     */
-    private function getPacmanTarget(PacmanInterface $pacman): array
-    {
-        try {
-            return $this->getClosestSuperPellet($pacman)->getPosition();
-        } catch(Exception $exception) {}
-        try {
-            return $this->getClosestPellet($pacman)->getPosition();
-        } catch(Exception $exception) {}
-        return [random_int(0, $this->map->getWidth()-1), random_int(0, $this->map->getHeight()-1)];
-    }
-
-    /**
-     * @param PacmanInterface $pacman
+     * @param array $pellets
      *
      * @return PelletInterface
      * @throws PelletNotFoundException
      */
-    private function getClosestSuperPellet(PacmanInterface $pacman): PelletInterface
+    private function getClosestPellet(PacmanInterface $pacman, array $pellets): PelletInterface
     {
-        return $this->getClosest($pacman, $this->pelletsManager->getSuperPellets());
-    }
-
-    /**
-     * @return PelletInterface
-     * @throws PelletNotFoundException
-     */
-    private function getClosestPellet(PacmanInterface $pacman): PelletInterface
-    {
-        return $this->getClosest($pacman, $this->pelletsManager->getSmallPellets());
+        return $this->getClosest($pacman, $pellets);
     }
 
     /**
@@ -402,7 +390,35 @@ class TargetFinder implements TargetFinderInterface
     private function getSquareDistance(Point $a, Point $b): float {
         $aCoordinates = $a->getPosition();
         $bCoordinates = $b->getPosition();
-        return ($aCoordinates[0] - $bCoordinates[0])**2 + ($aCoordinates[1] - $bCoordinates[1])**2;
+        return ($aCoordinates[0] - $bCoordinates[0]) ** 2 + ($aCoordinates[1] - $bCoordinates[1]) ** 2;
+    }
+
+    /**
+     * @param PelletInterface $superPellet
+     * @param PacmanInterface[] $freePacmen
+     *
+     * @return PacmanInterface
+     */
+    private function getClosestPacman(PelletInterface $superPellet, array $freePacmen): PacmanInterface
+    {
+        $closestPacman = array_shift($freePacmen);
+        $closestPacmanDistance = $this->getSquareDistance($closestPacman, $superPellet);
+        foreach ($freePacmen as $freePacman) {
+            if (($currentPacmanDistance = $this->getSquareDistance($freePacman, $superPellet))
+                < $closestPacmanDistance) {
+                $closestPacman = $freePacman;
+                $closestPacmanDistance = $currentPacmanDistance;
+            }
+        }
+        return $closestPacman;
+    }
+
+    private function getRandomPosition(): array
+    {
+        return [
+            random_int(0, $this->map->getWidth() - 1),
+            random_int(0, $this->map->getHeight() - 1),
+        ];
     }
 }
 
