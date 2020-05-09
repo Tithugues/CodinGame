@@ -288,9 +288,6 @@ class TargetFinder implements TargetFinderInterface
         $targets = [];
         foreach ($this->pacmenManager->getMyPacmen() as $pacman) {
             $targets[] = 'MOVE ' . $pacman->getId() . ' ' . implode(' ', $this->getPacmanTarget($pacman));
-            _('New loop');
-            _($pacman);
-            _($targets[count($targets) - 1]);
         }
         return $targets;
     }
