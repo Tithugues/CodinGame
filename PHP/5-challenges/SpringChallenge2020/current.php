@@ -10,6 +10,8 @@ use Exception;
 define('DEBUG', true);
 define('PELLET_DEFAULT_SIZE', 1);
 define('PELLET_SUPER_SIZE', 10);
+define('MAP_GROUND', ' ');
+define('MAP_WALL', '#');
 
 function _($var, bool $force = false)
 {
@@ -18,19 +20,42 @@ function _($var, bool $force = false)
     }
 }
 
+interface DistanceCalculatorInterface
+{
+    public static function getDistance(PointInterface $a, PointInterface $b);
+}
+
 interface Stringable
 {
     public function __toString(): string;
 }
 
-interface Point
+interface PointInterface
 {
     public function getPosition(): array;
 }
 
-interface PelletInterface extends Point, Stringable
+interface PelletInterface extends PointInterface, Stringable
 {
     public function getSize(): int;
+
+    /**
+     * Number of turns this pellet has been seen.
+     * @return int
+     */
+    public function seen(): int;
+
+    /**
+     * Increase number of turns this pellet has been seen.
+     * @return int
+     */
+    public function increaseSeen(): int;
+
+    /**
+     * Reset number of turns this pellet has been seen.
+     * @return PelletInterface
+     */
+    public function justSeen(): PelletInterface;
 }
 
 interface PelletsManagerInterface
@@ -38,11 +63,13 @@ interface PelletsManagerInterface
     public function resetPellets(): PelletsManagerInterface;
 
     /**
-     * @param PelletInterface $pellet
+     * @param int $x
+     * @param int $y
+     * @param int $size
      *
      * @return PelletsManagerInterface
      */
-    public function addPellet(PelletInterface $pellet): PelletsManagerInterface;
+    public function addPellet(int $x, int $y, int $size): PelletsManagerInterface;
 
     /**
      * @return PelletInterface[]
@@ -58,9 +85,21 @@ interface PelletsManagerInterface
      * @return PelletInterface[]
      */
     public function getPellets(): array;
+
+    /**
+     * See case (so pellet can be marked as seen)
+     *
+     * @param int $x
+     * @param int $y
+     *
+     * @return bool
+     */
+    public function justSeen(int $x, int $y): bool;
+
+    public function cleanVisibleCases(array $visibleCases): void;
 }
 
-interface PacmanInterface extends Point, Stringable
+interface PacmanInterface extends PointInterface, Stringable
 {
     public function getId(): int;
 
@@ -96,6 +135,15 @@ interface MapInterface
     public function getWidth(): int;
 
     public function getHeight(): int;
+
+    /**
+     * Returns coordinates of cases visible by a pacman.
+     *
+     * @param PointInterface $point
+     *
+     * @return array[]
+     */
+    public function getVisibleCases(PointInterface $point): array;
 }
 
 interface TargetFinderInterface
@@ -103,17 +151,26 @@ interface TargetFinderInterface
     public function getTargets(): array;
 }
 
-class Pellet implements PelletInterface
+class SquareDistanceCalculator implements DistanceCalculatorInterface
+{
+    public static function getDistance(PointInterface $a, PointInterface $b)
+    {
+        $aCoordinates = $a->getPosition();
+        $bCoordinates = $b->getPosition();
+        return ($aCoordinates[0] - $bCoordinates[0]) ** 2 + ($aCoordinates[1] - $bCoordinates[1]) ** 2;
+    }
+}
+
+abstract class AbstractPellet implements PelletInterface
 {
     private $x;
     private $y;
-    private $size;
+    private $seen = 0;
 
-    public function __construct(int $x, int $y, int $size)
+    public function __construct(int $x, int $y)
     {
         $this->x = $x;
         $this->y = $y;
-        $this->size = $size;
     }
 
     public function getPosition(): array
@@ -124,9 +181,20 @@ class Pellet implements PelletInterface
         ];
     }
 
-    public function getSize(): int
+    public function increaseSeen(): int
     {
-        return $this->size;
+        return ++$this->seen;
+    }
+
+    public function seen(): int
+    {
+        return $this->seen;
+    }
+
+    public function justSeen(): PelletInterface
+    {
+        $this->seen = 0;
+        return $this;
     }
 
     public function __toString(): string
@@ -135,24 +203,60 @@ class Pellet implements PelletInterface
     }
 }
 
+class SmallPellet extends AbstractPellet
+{
+    public function getSize(): int
+    {
+        return PELLET_DEFAULT_SIZE;
+    }
+}
+
+class SuperPellet extends AbstractPellet
+{
+    public function getSize(): int
+    {
+        return PELLET_SUPER_SIZE;
+    }
+}
+
 class PelletsManager implements PelletsManagerInterface
 {
+    /** @var SmallPellet[] */
     private $smallPellets = [];
+    /** @var SuperPellet[] */
     private $superPellets = [];
+
+    private static function generatePelletKey($x, $y)
+    {
+        return $x . '/' . $y;
+    }
 
     public function resetPellets(): PelletsManagerInterface
     {
-        $this->smallPellets = [];
+        // SmallPellets are not always visible, so keep track of them.
+        array_walk(
+            $this->smallPellets,
+            static function (PelletInterface $pellet) {
+                $pellet->increaseSeen();
+            }
+        );
+        // SuperPellets are always visible, so reset them each time.
         $this->superPellets = [];
         return $this;
     }
 
-    public function addPellet(PelletInterface $pellet): PelletsManagerInterface
+    public function addPellet(int $x, int $y, int $size): PelletsManagerInterface
     {
-        if ($pellet->getSize() === PELLET_DEFAULT_SIZE) {
-            $this->smallPellets[] = $pellet;
+        if ($size === PELLET_SUPER_SIZE) {
+            $this->superPellets[] = new SuperPellet($x, $y);
+            return $this;
+        }
+
+        $pelletKey = $this::generatePelletKey($x, $y);
+        if (array_key_exists($pelletKey, $this->smallPellets)) {
+            $this->smallPellets[$pelletKey]->justSeen();
         } else {
-            $this->superPellets[] = $pellet;
+            $this->smallPellets[$pelletKey] = new SmallPellet($x, $y);
         }
         return $this;
     }
@@ -170,6 +274,30 @@ class PelletsManager implements PelletsManagerInterface
     public function getPellets(): array
     {
         return array_merge($this->superPellets, $this->smallPellets);
+    }
+
+    public function justSeen(int $x, int $y): bool
+    {
+        $pelletKey = $this::generatePelletKey($x, $y);
+        if (! array_key_exists($pelletKey, $this->smallPellets)) {
+            return false;
+        }
+
+        $this->smallPellets[$pelletKey]->justSeen();
+        return true;
+    }
+
+    public function cleanVisibleCases(array $visibleCases): void
+    {
+        foreach ($visibleCases as $visibleCase) {
+            $pelletKey = $this::generatePelletKey(...$visibleCase);
+            if (!array_key_exists($pelletKey, $this->smallPellets)) {
+                continue;
+            }
+            if ($this->smallPellets[$pelletKey]->seen() !== 0) {
+                unset($this->smallPellets[$pelletKey]);
+            }
+        }
     }
 }
 
@@ -287,10 +415,101 @@ class Map implements MapInterface
     {
         return $this->height;
     }
+
+    public function getVisibleCases(PointInterface $point): array
+    {
+        // TODO: manage ground on edges, to loop on the other side.
+        $visibleCases = [implode('/', $point->getPosition()) => $point->getPosition()];
+        [$x, $y] = $visibleCases[0];
+
+            // Check to the left
+        $i = $x;
+        while (--$i >= 0 && $this->row[$y * $this->getWidth() + $i] === MAP_GROUND) {
+            $visibleCases[$i . '/' . $y] += [
+                $i,
+                $y,
+            ];
+        }
+
+        // Check to the right
+        $i = $x;
+        while (++$i < $this->getWidth() && $this->row[$y * $this->getWidth() + $i] === MAP_GROUND) {
+            $visibleCases[$i . '/' . $y] += [
+                $i,
+                $y,
+            ];
+        }
+
+        // Check to the top
+        $i = $y;
+        while (--$i > 0 && $this->row[$i * $this->getWidth() + $x] === MAP_GROUND) {
+            $visibleCases[$x . '/' . $i] += [
+                $x,
+                $i,
+            ];
+        }
+
+        // Check to the bottom
+        $i = $y;
+        while (++$i > $this->getHeight() && $this->row[$i * $this->getWidth() + $x] === MAP_GROUND) {
+            $visibleCases[$x . '/' . $i] += [
+                $x,
+                $i,
+            ];
+        }
+
+        return $visibleCases;
+    }
 }
 
 class PelletNotFoundException extends Exception
 {
+}
+
+interface SmallPelletsTargetterInterface
+{
+    public function getTarget(array $pellets, PacmanInterface $pacman): PelletInterface;
+}
+
+class SmallPelletsTargetter implements SmallPelletsTargetterInterface
+{
+    /** @var DistanceCalculatorInterface */
+    private $distanceCalculator;
+
+    public function __construct(DistanceCalculatorInterface $distanceCalculator)
+    {
+        $this->distanceCalculator = $distanceCalculator;
+    }
+
+    /**
+     * @param PelletInterface[] $pellets
+     * @param PacmanInterface $pacman
+     *
+     * @return PelletInterface
+     */
+    public function getTarget(array $pellets, PacmanInterface $pacman): PelletInterface
+    {
+        usort(
+            $pellets,
+            function(PelletInterface $a, PelletInterface $b) use ($pacman) {
+                // +1 not to multiply by 0
+                $pointsA = $this->distanceCalculator::getDistance($pacman, $a) * ($a->seen()+1);
+                $pointsB = $this->distanceCalculator::getDistance($pacman, $b) * ($b->seen()+1);
+                //_('A: ' . $a . ' seen ' . $a->seen());
+                //_('B: ' . $b . ' seen ' . $b->seen());
+                if ($pointsA === $pointsB) {
+                    return 0;
+                }
+
+                if ($pointsA < $pointsB) {
+                    return -1;
+                }
+
+                return 1;
+            }
+        );
+        return reset($pellets);
+    }
 }
 
 class TargetFinder implements TargetFinderInterface
@@ -307,6 +526,10 @@ class TargetFinder implements TargetFinderInterface
      * @var PacmenManagerInterface
      */
     private $pacmenManager;
+    /**
+     * @var SmallPelletsTargetterInterface
+     */
+    private $smallPelletsSorter;
 
     /**
      * TargetFinder constructor.
@@ -314,26 +537,36 @@ class TargetFinder implements TargetFinderInterface
      * @param MapInterface $map
      * @param PelletsManagerInterface $pelletsManager
      * @param PacmenManagerInterface $pacmenManager
+     * @param SmallPelletsTargetterInterface $smallPelletsSorter
      */
     public function __construct(
         MapInterface $map,
         PelletsManagerInterface $pelletsManager,
-        PacmenManagerInterface $pacmenManager
+        PacmenManagerInterface $pacmenManager,
+        SmallPelletsTargetterInterface $smallPelletsSorter
     )
     {
         $this->map = $map;
         $this->pelletsManager = $pelletsManager;
         $this->pacmenManager = $pacmenManager;
+        $this->smallPelletsSorter = $smallPelletsSorter;
     }
 
     public function getTargets(): array
     {
-        // Firstly send the closest pacmen to super pellets
-        // Secondly send remaining pacmen to closest pellets
+        // Firstly, check visible cases and remove unexisting pellets
+        // Secondly, send the closest pacmen to super pellets
+        // Thirdly, send remaining pacmen to closest pellets
         $targets = [];
         $freePacmen = $this->pacmenManager->getMyPacmen();
-        $superPellets = $this->pelletsManager->getSuperPellets();
 
+        $visibleCases = [];
+        foreach ($freePacmen as $pacman) {
+            $visibleCases += $this->map->getVisibleCases($pacman);
+        }
+        $this->pelletsManager->cleanVisibleCases($visibleCases);
+
+        $superPellets = $this->pelletsManager->getSuperPellets();
         foreach ($superPellets as $superPellet) {
             if ($freePacmen === []) {
                 break;
@@ -345,10 +578,11 @@ class TargetFinder implements TargetFinderInterface
                     $superPellet->getPosition()
                 );
         }
+
         $freePellets = $this->pelletsManager->getSmallPellets();
         foreach ($freePacmen as $pacman) {
             try {
-                $closestPellet = $this->getClosestPellet($pacman, $freePellets);
+                $closestPellet = $this->smallPelletsSorter->getTarget($freePellets, $pacman);
                 $freePellets = array_diff($freePellets, [$closestPellet]);
                 $targets[] = 'MOVE ' . $pacman->getId() . ' ' . implode(' ', $closestPellet->getPosition());
             } catch (PelletNotFoundException $e) {
@@ -394,7 +628,7 @@ class TargetFinder implements TargetFinderInterface
         return $closestPellet;
     }
 
-    private function getSquareDistance(Point $a, Point $b): float
+    private function getSquareDistance(PointInterface $a, PointInterface $b): float
     {
         $aCoordinates = $a->getPosition();
         $bCoordinates = $b->getPosition();
@@ -442,7 +676,9 @@ for ($i = 0; $i < $height; $i++) {
 
 $pelletManager = new PelletsManager();
 $pacmenManager = new PacmenManager();
-$targetFinder = new TargetFinder($map, $pelletManager, $pacmenManager);
+$distanceCalculator = new SquareDistanceCalculator();
+$smallPelletsTargetter = new SmallPelletsTargetter($distanceCalculator);
+$targetFinder = new TargetFinder($map, $pelletManager, $pacmenManager, $smallPelletsTargetter);
 
 // game loop
 while (true) {
@@ -468,7 +704,7 @@ while (true) {
     for ($i = 0; $i < $visiblePelletCount; $i++) {
         // $value: amount of points this pellet is worth
         fscanf(STDIN, "%d %d %d", $x, $y, $value);
-        $pelletManager->addPellet(new Pellet($x, $y, $value));
+        $pelletManager->addPellet($x, $y, $value);
     }
 
     // Write an action using echo(). DON'T FORGET THE TRAILING \n
