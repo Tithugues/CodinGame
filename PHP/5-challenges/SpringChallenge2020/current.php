@@ -11,7 +11,8 @@ define('DEBUG', true);
 define('PELLET_DEFAULT_SIZE', 1);
 define('PELLET_SUPER_SIZE', 10);
 
-function _($var, bool $force = false) {
+function _($var, bool $force = false)
+{
     if (DEBUG || $force) {
         error_log(var_export($var, true));
     }
@@ -39,7 +40,7 @@ interface PelletsManagerInterface
     /**
      * @param PelletInterface $pellet
      *
-     * @return MapInterface
+     * @return PelletsManagerInterface
      */
     public function addPellet(PelletInterface $pellet): PelletsManagerInterface;
 
@@ -288,7 +289,9 @@ class Map implements MapInterface
     }
 }
 
-class PelletNotFoundException extends Exception {}
+class PelletNotFoundException extends Exception
+{
+}
 
 class TargetFinder implements TargetFinderInterface
 {
@@ -312,7 +315,11 @@ class TargetFinder implements TargetFinderInterface
      * @param PelletsManagerInterface $pelletsManager
      * @param PacmenManagerInterface $pacmenManager
      */
-    public function __construct(MapInterface $map, PelletsManagerInterface $pelletsManager, PacmenManagerInterface $pacmenManager)
+    public function __construct(
+        MapInterface $map,
+        PelletsManagerInterface $pelletsManager,
+        PacmenManagerInterface $pacmenManager
+    )
     {
         $this->map = $map;
         $this->pelletsManager = $pelletsManager;
@@ -387,7 +394,8 @@ class TargetFinder implements TargetFinderInterface
         return $closestPellet;
     }
 
-    private function getSquareDistance(Point $a, Point $b): float {
+    private function getSquareDistance(Point $a, Point $b): float
+    {
         $aCoordinates = $a->getPosition();
         $bCoordinates = $b->getPosition();
         return ($aCoordinates[0] - $bCoordinates[0]) ** 2 + ($aCoordinates[1] - $bCoordinates[1]) ** 2;
@@ -451,7 +459,7 @@ while (true) {
         // $speedTurnsLeft: unused in wood leagues
         // $abilityCooldown: unused in wood leagues
         fscanf(STDIN, "%d %d %d %d %s %d %d", $pacId, $mine, $x, $y, $typeId, $speedTurnsLeft, $abilityCooldown);
-        $pacmenManager->addPacman(new Pacman($pacId, (bool) $mine, $x, $y));
+        $pacmenManager->addPacman(new Pacman($pacId, (bool)$mine, $x, $y));
     }
 
     // $visiblePelletCount: all pellets in sight
