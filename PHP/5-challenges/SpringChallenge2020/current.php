@@ -40,12 +40,17 @@ interface PelletsManagerInterface
     /**
      * @return PelletInterface[]
      */
-    public function getPellets(): array;
+    public function getSmallPellets(): array;
 
     /**
      * @return PelletInterface[]
      */
     public function getSuperPellets(): array;
+
+    /**
+     * @return PelletInterface[]
+     */
+    public function getPellets(): array;
 }
 
 interface PacmanInterface extends Point
@@ -120,12 +125,12 @@ class Pellet implements PelletInterface
 
 class PelletsManager implements PelletsManagerInterface
 {
-    private $pellets = [];
+    private $smallPellets = [];
     private $superPellets = [];
 
     public function resetPellets(): PelletsManagerInterface
     {
-        $this->pellets = [];
+        $this->smallPellets = [];
         $this->superPellets = [];
         return $this;
     }
@@ -133,21 +138,26 @@ class PelletsManager implements PelletsManagerInterface
     public function addPellet(PelletInterface $pellet): PelletsManagerInterface
     {
         if ($pellet->getSize() === PELLET_DEFAULT_SIZE) {
-            $this->pellets[] = $pellet;
+            $this->smallPellets[] = $pellet;
         } else {
             $this->superPellets[] = $pellet;
         }
         return $this;
     }
 
-    public function getPellets(): array
+    public function getSmallPellets(): array
     {
-        return $this->pellets;
+        return $this->smallPellets;
     }
 
     public function getSuperPellets(): array
     {
         return $this->superPellets;
+    }
+
+    public function getPellets(): array
+    {
+        return array_merge($this->superPellets, $this->smallPellets);
     }
 }
 
@@ -194,6 +204,11 @@ class Pacman implements PacmanInterface
             $this->x,
             $this->y,
         ];
+    }
+
+    public function __toString()
+    {
+        return (string)$this->getId();
     }
 }
 
@@ -270,12 +285,22 @@ class TargetFinder implements TargetFinderInterface
      * @var MapInterface
      */
     private $map;
+    /**
+     * @var PelletsManagerInterface
+     */
     private $pelletsManager;
     /**
      * @var PacmenManagerInterface
      */
     private $pacmenManager;
 
+    /**
+     * TargetFinder constructor.
+     *
+     * @param MapInterface $map
+     * @param PelletsManagerInterface $pelletsManager
+     * @param PacmenManagerInterface $pacmenManager
+     */
     public function __construct(MapInterface $map, PelletsManagerInterface $pelletsManager, PacmenManagerInterface $pacmenManager)
     {
         $this->map = $map;
@@ -286,11 +311,29 @@ class TargetFinder implements TargetFinderInterface
     public function getTargets(): array
     {
         $targets = [];
-        foreach ($this->pacmenManager->getMyPacmen() as $pacman) {
-            $targets[] = 'MOVE ' . $pacman->getId() . ' ' . implode(' ', $this->getPacmanTarget($pacman));
-            _('New loop');
-            _($pacman);
-            _($targets[count($targets) - 1]);
+        $myPacmen = $this->pacmenManager->getMyPacmen();
+        $allPellets = $this->pelletsManager->getPellets();
+
+        foreach ($allPellets as $pellet) {
+            if ($myPacmen === []) {
+                _('Exit');
+                break;
+            }
+            _('Loop');
+            $freePacmen = $myPacmen;
+            $closestPacman = array_shift($freePacmen);
+            $closestPacmanDistance = $this->getSquareDistance($closestPacman, $pellet);
+            foreach ($freePacmen as $freePacman) {
+                if (($currentPacmanDistance = $this->getSquareDistance($freePacman, $pellet)) < $closestPacmanDistance) {
+                    $closestPacman = $freePacman;
+                    $closestPacmanDistance = $currentPacmanDistance;
+                }
+            }
+            $myPacmen = array_diff(
+                $myPacmen,
+                [$closestPacman]
+            );
+            $targets[] = 'MOVE ' . $closestPacman->getId() . ' ' . implode(' ', $pellet->getPosition());
         }
         return $targets;
     }
@@ -309,7 +352,7 @@ class TargetFinder implements TargetFinderInterface
         try {
             return $this->getClosestPellet($pacman)->getPosition();
         } catch(Exception $exception) {}
-        return [random_int(0, $this->map->getWidth()), random_int(0, $this->map->getHeight())];
+        return [random_int(0, $this->map->getWidth()-1), random_int(0, $this->map->getHeight()-1)];
     }
 
     /**
@@ -329,7 +372,7 @@ class TargetFinder implements TargetFinderInterface
      */
     private function getClosestPellet(PacmanInterface $pacman): PelletInterface
     {
-        return $this->getClosest($pacman, $this->pelletsManager->getPellets());
+        return $this->getClosest($pacman, $this->pelletsManager->getSmallPellets());
     }
 
     /**
