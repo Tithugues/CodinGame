@@ -24,7 +24,7 @@ define('CHECKPOINT_RAYON', 600);
 
 define('POD_TIMEOUT', 100);
 
-define('SOLUTION_GENERATION_NUMBER_SOLUTIONS', 4);
+define('SOLUTION_GENERATION_NUMBER_SOLUTIONS', 3);
 define('SOLUTION_GENERATION_NUMBER_TURNS', 6);
 define('SOLUTION_GENERATION_TARGET_FACTOR', 10000);
 
@@ -228,7 +228,7 @@ final class Pod implements PodInterface
      */
     private function rotate(Coordinates $target): self
     {
-        $this->angle = AngleManager::getAngle($this->currentCoordinates, $target);
+        $this->angle = AngleManager::angleLimiter(AngleManager::getAngle($this->currentCoordinates, $target));
         return $this;
     }
 
@@ -402,6 +402,19 @@ final class AngleManager
     public static function diffAngles(float $end, int $start): float
     {
         return self::sanitizeAngle($end - $start);
+    }
+
+    public static function angleLimiter(float $angle, float $max = MAX_ROTATION): float
+    {
+        if ($angle > $max) {
+            return $max;
+        }
+
+        if ($angle < -$max) {
+            return -$max;
+        }
+
+        return $angle;
     }
 }
 
@@ -589,19 +602,6 @@ final class DummySolutionGenerator implements SolutionGeneratorInterface
         return $this->generateTurns($solution, --$numberTurnsToGenerate);
     }
 
-    private function angleLimiter(float $angle): float
-    {
-        if ($angle > MAX_ROTATION) {
-            return MAX_ROTATION;
-        }
-
-        if ($angle < -MAX_ROTATION) {
-            return -MAX_ROTATION;
-        }
-
-        return $angle;
-    }
-
     private function getMovementAngle(PodInterface $pod): float
     {
         $hyp = sqrt($pod->getSpeedX()**2 + $pod->getSpeedY()**2);
@@ -620,42 +620,45 @@ final class DummySolutionGenerator implements SolutionGeneratorInterface
      */
     private function generateMove(PodInterface $pod): MoveInterface
     {
-        $nextCP = CheckpointsManager::getCheckpoint($pod->getNextCheckpointId());
-        $angleToTarget = AngleManager::getSignedAngle(AngleManager::getAngle($pod->getCurrentCoordinates(), $nextCP));
-        _('$angleToTarget: ' . $angleToTarget);
-        $distToTarget = DistanceManager::measure($pod->getCurrentCoordinates(), $nextCP);
-        _('$distToTarget: ' . $distToTarget);
+        $testPod = clone($pod);
+        $nextMove = new Move(CheckpointsManager::getNextCheckpoint($pod->getNextCheckpointId()), random_int(40, 100));
+        $testPod->play($nextMove);
+        if ($pod->getNextCheckpointId() !== $testPod->getNextCheckpointId()) {
+            _('Move from CP ' . $pod->getNextCheckpointId() . ' to CP ' . $testPod->getNextCheckpointId() . '!');
+            return($nextMove);
+        }
 
-        _('My Angle: ' . AngleManager::getSignedAngle($pod->getAngle()));
+        $nextCP = CheckpointsManager::getCheckpoint($pod->getNextCheckpointId());
+
+        $angleToTarget = AngleManager::getSignedAngle(AngleManager::getAngle($pod->getCurrentCoordinates(), $nextCP));
+        $distToTarget = DistanceManager::measure($pod->getCurrentCoordinates(), $nextCP);
+
         if ($pod->getAngle() === -1.0) {
             $rotation = $angleToTarget;
             $diffAngleToTarget = 0;
         } else {
             $diffAngleToTarget = AngleManager::getSignedAngle(AngleManager::diffAngles($angleToTarget, $pod->getAngle()));
-            _('$diffAngleToTarget: ' . $diffAngleToTarget);
 
             $movementAngle = AngleManager::getSignedAngle($this->getMovementAngle($pod));
-            _('$movementAngle: ' . $movementAngle);
 
             $diffMovementTargetAngles = AngleManager::getSignedAngle(AngleManager::diffAngles($angleToTarget, $movementAngle));
-            _('$diffMovementTargetAngles: ' . $diffMovementTargetAngles);
             if (abs($diffMovementTargetAngles) > 45) {
-                _('Premier if');
                 $rotation = $diffAngleToTarget > 0 ? MAX_ROTATION : -MAX_ROTATION;
             } elseif (abs($diffAngleToTarget) <= MAX_ROTATION) {
-                _('Deuxième if');
+                if ($distToTarget < 3000) {
+                    $maxRotation = 10;
+                } else {
+                    $maxRotation = MAX_ROTATION;
+                }
+
                 $rotation = $diffMovementTargetAngles;
-                _('rotation temp: ' . $rotation);
-                $rotation = random_int($this->angleLimiter($rotation-5), $this->angleLimiter($rotation+5));
+                //$rotation = random_int(AngleManager::angleLimiter($rotation-5, $maxRotation), AngleManager::angleLimiter($rotation+5, $maxRotation));
             } else {
-                _('Troisième if');
                 $rotation = ($diffAngleToTarget >= 0) ? MAX_ROTATION : -MAX_ROTATION;
             }
         }
-        _('Rotation: ' . $rotation);
 
         $newAngle = AngleManager::addAngles($pod->getAngle(), $rotation);
-        _('new angle: ' . $newAngle);
         $target = new Coordinates(
             $pod->getCurrentCoordinates()->getX() + cos(deg2rad($newAngle)) * SOLUTION_GENERATION_TARGET_FACTOR,
             $pod->getCurrentCoordinates()->getY() + sin(deg2rad($newAngle)) * SOLUTION_GENERATION_TARGET_FACTOR,
@@ -669,15 +672,13 @@ final class DummySolutionGenerator implements SolutionGeneratorInterface
             $thrust = random_int(50, 70);
         } else {
             if ($distToTarget < 1400) {
-                $thrust = random_int(40, 100);
+                $thrust = min(65, random_int(40, 100));
             } elseif ($distToTarget < 2000) {
-                $thrust = random_int(60, 100);
+                $thrust = min(80, random_int(60, 100));
             } else {
                 $thrust = 100;
             }
         }
-
-        _('Thrust: ' . $thrust);
 
         return new Move($target, $thrust);
     }
