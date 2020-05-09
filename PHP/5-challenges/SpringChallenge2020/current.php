@@ -3,7 +3,7 @@
  * Grab the pellets as fast as you can!
  **/
 
-namespace PacMan\Bois;
+namespace PacMan\Bronze;
 
 use Exception;
 
