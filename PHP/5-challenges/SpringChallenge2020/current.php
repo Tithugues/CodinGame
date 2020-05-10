@@ -22,7 +22,7 @@ function _($var, bool $force = false)
 
 interface DistanceCalculatorInterface
 {
-    public static function getDistance(PointInterface $a, PointInterface $b);
+    public function getDistance(PointInterface $a, PointInterface $b);
 }
 
 interface Stringable
@@ -144,6 +144,15 @@ interface MapInterface
      * @return array[]
      */
     public function getVisibleCases(PointInterface $point): array;
+
+    /**
+     * Returns grounds connected to given case
+     *
+     * @param int[] $coordinates
+     *
+     * @return array
+     */
+    public function connectedGroundCases(array $coordinates): array;
 }
 
 interface TargetFinderInterface
@@ -153,12 +162,64 @@ interface TargetFinderInterface
 
 class SquareDistanceCalculator implements DistanceCalculatorInterface
 {
-    public static function getDistance(PointInterface $a, PointInterface $b)
+    public function getDistance(PointInterface $a, PointInterface $b)
     {
         $aCoordinates = $a->getPosition();
         $bCoordinates = $b->getPosition();
         return ($aCoordinates[0] - $bCoordinates[0]) ** 2 + ($aCoordinates[1] - $bCoordinates[1]) ** 2;
     }
+}
+
+class GroundDistanceCalculator implements DistanceCalculatorInterface
+{
+    /**
+     * @var MapInterface
+     */
+    private $map;
+
+    /**
+     * Distances between points
+     * @var array
+     *
+     * Format:
+     * starting point => [arrival point => distance]
+     */
+    private $distances = [];
+
+    public function __construct(MapInterface $map)
+    {
+        $this->map = $map;
+    }
+
+    public function getDistance(PointInterface $a, PointInterface $b)
+    {
+        $startingPointKey = implode('/', $a->getPosition());
+        $arrivalPointKey = implode('/', $b->getPosition());
+
+        if (! isset($this->distances[$startingPointKey])) {
+            $this->distances[$startingPointKey] = [$startingPointKey => 0];
+        }
+        $toVisit = $this->distances[$startingPointKey];
+        while (!isset($this->distances[$startingPointKey][$arrivalPointKey])) {
+            $currentPositionKey = key($toVisit);
+            $currentPositionDistance = array_shift($toVisit);
+            $connectedGroundCases = $this->map->connectedGroundCases(explode('/', $currentPositionKey));
+            // Remove all cases already visited
+            $connectedGroundCases = array_diff_key($connectedGroundCases, $this->distances[$startingPointKey]);
+            // Or planned to be visited
+            $connectedGroundCases = array_diff_key($connectedGroundCases, $toVisit);
+            $toVisit += array_combine(
+                array_keys($connectedGroundCases),
+                array_fill(0, count($connectedGroundCases), $currentPositionDistance + 1)
+            );
+            asort($toVisit);
+            reset($toVisit); // Needed?
+            $this->distances[$startingPointKey] += $toVisit;
+        }
+
+        return $this->distances[$startingPointKey][$arrivalPointKey];
+    }
+
 }
 
 abstract class AbstractPellet implements PelletInterface
@@ -291,7 +352,7 @@ class PelletsManager implements PelletsManagerInterface
     {
         foreach ($visibleCases as $visibleCase) {
             $pelletKey = $this::generatePelletKey(...$visibleCase);
-            if (!array_key_exists($pelletKey, $this->smallPellets)) {
+            if (! array_key_exists($pelletKey, $this->smallPellets)) {
                 continue;
             }
             if ($this->smallPellets[$pelletKey]->seen() !== 0) {
@@ -420,12 +481,12 @@ class Map implements MapInterface
     {
         // TODO: manage ground on edges, to loop on the other side.
         $visibleCases = [implode('/', $point->getPosition()) => $point->getPosition()];
-        [$x, $y] = $visibleCases[0];
+        [$x, $y] = $visibleCases[implode('/', $point->getPosition())];
 
-            // Check to the left
+        // Check to the left
         $i = $x;
         while (--$i >= 0 && $this->row[$y * $this->getWidth() + $i] === MAP_GROUND) {
-            $visibleCases[$i . '/' . $y] += [
+            $visibleCases[$i . '/' . $y] = [
                 $i,
                 $y,
             ];
@@ -434,7 +495,7 @@ class Map implements MapInterface
         // Check to the right
         $i = $x;
         while (++$i < $this->getWidth() && $this->row[$y * $this->getWidth() + $i] === MAP_GROUND) {
-            $visibleCases[$i . '/' . $y] += [
+            $visibleCases[$i . '/' . $y] = [
                 $i,
                 $y,
             ];
@@ -443,7 +504,7 @@ class Map implements MapInterface
         // Check to the top
         $i = $y;
         while (--$i > 0 && $this->row[$i * $this->getWidth() + $x] === MAP_GROUND) {
-            $visibleCases[$x . '/' . $i] += [
+            $visibleCases[$x . '/' . $i] = [
                 $x,
                 $i,
             ];
@@ -452,7 +513,7 @@ class Map implements MapInterface
         // Check to the bottom
         $i = $y;
         while (++$i > $this->getHeight() && $this->row[$i * $this->getWidth() + $x] === MAP_GROUND) {
-            $visibleCases[$x . '/' . $i] += [
+            $visibleCases[$x . '/' . $i] = [
                 $x,
                 $i,
             ];
@@ -460,6 +521,48 @@ class Map implements MapInterface
 
         return $visibleCases;
     }
+
+    public function connectedGroundCases(array $coordinates): array
+    {
+        // TODO: manage ground on edges, to loop on the other side.
+        $connected = [];
+        [$x, $y] = $coordinates;
+
+        // Check to the left
+        if (($x - 1) >= 0 && $this->row[$y * $this->getWidth() + $x - 1] === MAP_GROUND) {
+            $connected[($x - 1) . '/' . $y] = [
+                $x - 1,
+                $y,
+            ];
+        }
+
+        // Check to the right
+        if (($x + 1) < $this->getWidth() && $this->row[$y * $this->getWidth() + $x + 1] === MAP_GROUND) {
+            $connected[($x + 1) . '/' . $y] = [
+                $x + 1,
+                $y,
+            ];
+        }
+
+        // Check to the top
+        if (($y - 1) >= 0 && $this->row[($y - 1) * $this->getWidth() + $x] === MAP_GROUND) {
+            $connected[$x . '/' . ($y - 1)] = [
+                $x,
+                $y - 1,
+            ];
+        }
+
+        // Check to the bottom
+        if (($y + 1) < $this->getHeight() && $this->row[($y + 1) * $this->getWidth() + $x] === MAP_GROUND) {
+            $connected[$x . '/' . ($y + 1)] = [
+                $x,
+                $y + 1,
+            ];
+        }
+
+        return $connected;
+    }
+
 }
 
 class PelletNotFoundException extends Exception
@@ -491,10 +594,10 @@ class SmallPelletsTargetter implements SmallPelletsTargetterInterface
     {
         usort(
             $pellets,
-            function(PelletInterface $a, PelletInterface $b) use ($pacman) {
+            function (PelletInterface $a, PelletInterface $b) use ($pacman) {
                 // +1 not to multiply by 0
-                $pointsA = $this->distanceCalculator::getDistance($pacman, $a) * ($a->seen()+1);
-                $pointsB = $this->distanceCalculator::getDistance($pacman, $b) * ($b->seen()+1);
+                $pointsA = $this->distanceCalculator->getDistance($pacman, $a) * ($a->seen() + 1);
+                $pointsB = $this->distanceCalculator->getDistance($pacman, $b) * ($b->seen() + 1);
                 //_('A: ' . $a . ' seen ' . $a->seen());
                 //_('B: ' . $b . ' seen ' . $b->seen());
                 if ($pointsA === $pointsB) {
@@ -589,6 +692,7 @@ class TargetFinder implements TargetFinderInterface
                 $targets[] = 'MOVE ' . $pacman->getId() . ' ' . implode(' ', $this->getRandomPosition());
             }
         }
+
         return $targets;
     }
 
@@ -676,7 +780,7 @@ for ($i = 0; $i < $height; $i++) {
 
 $pelletManager = new PelletsManager();
 $pacmenManager = new PacmenManager();
-$distanceCalculator = new SquareDistanceCalculator();
+$distanceCalculator = new GroundDistanceCalculator($map);
 $smallPelletsTargetter = new SmallPelletsTargetter($distanceCalculator);
 $targetFinder = new TargetFinder($map, $pelletManager, $pacmenManager, $smallPelletsTargetter);
 
