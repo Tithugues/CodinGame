@@ -104,6 +104,10 @@ interface PacmanInterface extends PointInterface, Stringable
     public function getId(): int;
 
     public function isMine(): bool;
+
+    public function getAbilityCooldown(): int;
+
+    public function canUseAbility(): bool;
 }
 
 interface PacmenManagerInterface
@@ -196,7 +200,7 @@ class GroundDistanceCalculator implements DistanceCalculatorInterface
         $startingPointKey = implode('/', $a->getPosition());
         $arrivalPointKey = implode('/', $b->getPosition());
 
-        if (! isset($this->distances[$startingPointKey])) {
+        if (!isset($this->distances[$startingPointKey])) {
             $this->distances[$startingPointKey] = [$startingPointKey => 0];
         }
         $toVisit = $this->distances[$startingPointKey];
@@ -340,7 +344,7 @@ class PelletsManager implements PelletsManagerInterface
     public function justSeen(int $x, int $y): bool
     {
         $pelletKey = $this::generatePelletKey($x, $y);
-        if (! array_key_exists($pelletKey, $this->smallPellets)) {
+        if (!array_key_exists($pelletKey, $this->smallPellets)) {
             return false;
         }
 
@@ -352,7 +356,7 @@ class PelletsManager implements PelletsManagerInterface
     {
         foreach ($visibleCases as $visibleCase) {
             $pelletKey = $this::generatePelletKey(...$visibleCase);
-            if (! array_key_exists($pelletKey, $this->smallPellets)) {
+            if (!array_key_exists($pelletKey, $this->smallPellets)) {
                 continue;
             }
             if ($this->smallPellets[$pelletKey]->seen() !== 0) {
@@ -380,13 +384,36 @@ class Pacman implements PacmanInterface
      * @var int
      */
     private $y;
+    /**
+     * @var string
+     */
+    private $typeId;
+    /**
+     * @var int
+     */
+    private $speedTurnsLeft;
+    /**
+     * @var int
+     */
+    private $abilityCooldown;
 
-    public function __construct(int $id, bool $mine, int $x, int $y)
+    public function __construct(
+        int $id,
+        bool $mine,
+        int $x,
+        int $y,
+        string $typeId,
+        int $speedTurnsLeft,
+        int $abilityCooldown
+    )
     {
         $this->id = $id;
         $this->mine = $mine;
         $this->x = $x;
         $this->y = $y;
+        $this->typeId = $typeId;
+        $this->speedTurnsLeft = $speedTurnsLeft;
+        $this->abilityCooldown = $abilityCooldown;
     }
 
     public function getId(): int
@@ -410,6 +437,19 @@ class Pacman implements PacmanInterface
     public function __toString(): string
     {
         return (string)$this->getId();
+    }
+
+    /**
+     * @return int
+     */
+    public function getAbilityCooldown(): int
+    {
+        return $this->abilityCooldown;
+    }
+
+    public function canUseAbility(): bool
+    {
+        return $this->abilityCooldown === 0;
     }
 }
 
@@ -455,6 +495,8 @@ class Map implements MapInterface
     private $height;
     private $row = '';
 
+    private $visibleCases = [];
+
     public function __construct(int $width, int $height)
     {
         $this->width = $width;
@@ -477,9 +519,19 @@ class Map implements MapInterface
         return $this->height;
     }
 
+    /**
+     * TODO: manage ground on edges, to loop on the other side.
+     *
+     * @param PointInterface $point
+     *
+     * @return array|array[]
+     */
     public function getVisibleCases(PointInterface $point): array
     {
-        // TODO: manage ground on edges, to loop on the other side.
+        if (array_key_exists(implode('/', $point->getPosition()), $this->visibleCases)) {
+            return $this->visibleCases[implode('/', $point->getPosition())];
+        }
+
         $visibleCases = [implode('/', $point->getPosition()) => $point->getPosition()];
         [$x, $y] = $visibleCases[implode('/', $point->getPosition())];
 
@@ -512,14 +564,14 @@ class Map implements MapInterface
 
         // Check to the bottom
         $i = $y;
-        while (++$i > $this->getHeight() && $this->row[$i * $this->getWidth() + $x] === MAP_GROUND) {
+        while (++$i < $this->getHeight() && $this->row[$i * $this->getWidth() + $x] === MAP_GROUND) {
             $visibleCases[$x . '/' . $i] = [
                 $x,
                 $i,
             ];
         }
 
-        return $visibleCases;
+        return $this->visibleCases[implode('/', $point->getPosition())] = $visibleCases;
     }
 
     public function connectedGroundCases(array $coordinates): array
@@ -658,39 +710,85 @@ class TargetFinder implements TargetFinderInterface
     public function getTargets(): array
     {
         // Firstly, check visible cases and remove unexisting pellets
-        // Secondly, send the closest pacmen to super pellets
-        // Thirdly, send remaining pacmen to closest pellets
-        $targets = [];
-        $freePacmen = $this->pacmenManager->getMyPacmen();
+        // Secondly, target super pellets
+        // Thirdly, taret closest pellets
 
+        $start = microtime(true);
+
+        $pacmen = $this->pacmenManager->getMyPacmen();
         $visibleCases = [];
-        foreach ($freePacmen as $pacman) {
+        foreach ($pacmen as $pacman) {
             $visibleCases += $this->map->getVisibleCases($pacman);
         }
         $this->pelletsManager->cleanVisibleCases($visibleCases);
+        _('Visible cases cleaned = ' . (microtime(true) - $start));
 
-        $superPellets = $this->pelletsManager->getSuperPellets();
-        foreach ($superPellets as $superPellet) {
-            if ($freePacmen === []) {
-                break;
-            }
-            $closestPacman = $this->getClosestPacman($superPellet, $freePacmen);
-            $freePacmen = array_diff($freePacmen, [$closestPacman]);
-            $targets[] = 'MOVE ' . $closestPacman->getId() . ' ' . implode(
-                    ' ',
-                    $superPellet->getPosition()
-                );
-        }
-
+        $closestSmallPellets = [];
         $freePellets = $this->pelletsManager->getSmallPellets();
-        foreach ($freePacmen as $pacman) {
+        _('Free pellets ' . count($freePellets));
+        foreach ($pacmen as $pacman) {
             try {
                 $closestPellet = $this->smallPelletsSorter->getTarget($freePellets, $pacman);
                 $freePellets = array_diff($freePellets, [$closestPellet]);
-                $targets[] = 'MOVE ' . $pacman->getId() . ' ' . implode(' ', $closestPellet->getPosition());
+                $closestSmallPellets[] = $closestPellet;
             } catch (PelletNotFoundException $e) {
-                $targets[] = 'MOVE ' . $pacman->getId() . ' ' . implode(' ', $this->getRandomPosition());
+                break;
             }
+        }
+        _('Closest pellets identified = ' . (microtime(true) - $start));
+
+        return $this->pacmenTargets(
+            $this->pacmenManager->getMyPacmen(),
+            $this->pelletsManager->getSuperPellets(),
+            $closestSmallPellets
+        );
+    }
+
+    private function removeItem(array $list, $item): array
+    {
+        return array_diff($list, [$item]);
+    }
+
+    /**
+     * @param PacmanInterface[] $pacmen
+     * @param PelletInterface[] $superPellets
+     * @param PelletInterface[] $closestSmallPellets
+     *
+     * @return array
+     */
+    private function pacmenTargets(array $pacmen, array $superPellets, array $closestSmallPellets): array
+    {
+        $targets = [];
+        $pacmenKeys = array_keys($pacmen);
+        foreach ($pacmenKeys as $pacmenKey) {
+            $pacman = $pacmen[$pacmenKey];
+            if ($pacman->canUseAbility()) {
+                $targets[] = 'SPEED ' . $pacman->getId();
+                unset($pacmen[$pacmenKey]);
+            }
+        }
+
+        while ($pacmen !== []) {
+            if ($superPellets !== []) {
+                $pellet = array_shift($superPellets);
+                $pacman = $this->getClosestPacman($pellet, $pacmen);
+                $pacmen = $this->removeItem($pacmen, $pacman);
+                $targets[] = 'MOVE ' . $pacman->getId() . ' ' . implode(' ', $pellet->getPosition());
+                continue;
+            }
+
+            if ($closestSmallPellets !== []) {
+                $pellet = array_shift($closestSmallPellets);
+                $closestSmallPellets = $this->removeItem($closestSmallPellets, $pellet); // Exclude it from free pellets
+                $pacman = $this->getClosestPacman($pellet, $pacmen);
+                $pacmen = $this->removeItem($pacmen, $pacman); // Exclude it from free pacmen
+                $targets[] = 'MOVE ' . $pacman->getId() . ' ' . implode(' ', $pellet->getPosition());
+                continue;
+            }
+
+            $pacman = array_shift($pacmen);
+            $pacmen = $this->removeItem($pacmen, $pacman); // Exclude it from free pacmen
+            $targets[] = 'MOVE ' . $pacman->getId() . ' ' . implode(' ', $this->getRandomPosition());
         }
 
         return $targets;
@@ -799,7 +897,7 @@ while (true) {
         // $speedTurnsLeft: unused in wood leagues
         // $abilityCooldown: unused in wood leagues
         fscanf(STDIN, "%d %d %d %d %s %d %d", $pacId, $mine, $x, $y, $typeId, $speedTurnsLeft, $abilityCooldown);
-        $pacmenManager->addPacman(new Pacman($pacId, (bool)$mine, $x, $y));
+        $pacmenManager->addPacman(new Pacman($pacId, (bool)$mine, $x, $y, $typeId, $speedTurnsLeft, $abilityCooldown));
     }
 
     // $visiblePelletCount: all pellets in sight
