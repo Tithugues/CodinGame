@@ -200,25 +200,30 @@ class GroundDistanceCalculator implements DistanceCalculatorInterface
         $startingPointKey = implode('/', $a->getPosition());
         $arrivalPointKey = implode('/', $b->getPosition());
 
-        if (!isset($this->distances[$startingPointKey])) {
-            $this->distances[$startingPointKey] = [$startingPointKey => 0];
-        }
+        $this->distances[$startingPointKey][$startingPointKey] = 0;
+        asort($this->distances[$startingPointKey]);
         $toVisit = $this->distances[$startingPointKey];
         while (!isset($this->distances[$startingPointKey][$arrivalPointKey])) {
             $currentPositionKey = key($toVisit);
             $currentPositionDistance = array_shift($toVisit);
+            $this->distances[$startingPointKey][$currentPositionKey] = $currentPositionDistance;
+            $this->distances[$currentPositionKey][$startingPointKey] = $currentPositionDistance;
+            if (isset($this->distances[$currentPositionKey][$arrivalPointKey])) {
+                $this->distances[$startingPointKey][$arrivalPointKey] = $currentPositionDistance + $this->distances[$currentPositionKey][$arrivalPointKey];
+            }
             $connectedGroundCases = $this->map->connectedGroundCases(explode('/', $currentPositionKey));
             // Remove all cases already visited
             $connectedGroundCases = array_diff_key($connectedGroundCases, $this->distances[$startingPointKey]);
-            // Or planned to be visited
-            $connectedGroundCases = array_diff_key($connectedGroundCases, $toVisit);
             $toVisit += array_combine(
                 array_keys($connectedGroundCases),
                 array_fill(0, count($connectedGroundCases), $currentPositionDistance + 1)
             );
             asort($toVisit);
             reset($toVisit); // Needed?
-            $this->distances[$startingPointKey] += $toVisit;
+        }
+        $this->distances[$startingPointKey] += $toVisit;
+        foreach ($toVisit as $key => $distance) {
+            $this->distances[$key][$startingPointKey] = $distance;
         }
 
         return $this->distances[$startingPointKey][$arrivalPointKey];
@@ -644,25 +649,45 @@ class SmallPelletsTargetter implements SmallPelletsTargetterInterface
      */
     public function getTarget(array $pellets, PacmanInterface $pacman): PelletInterface
     {
-        usort(
-            $pellets,
-            function (PelletInterface $a, PelletInterface $b) use ($pacman) {
-                // +1 not to multiply by 0
-                $pointsA = $this->distanceCalculator->getDistance($pacman, $a) * ($a->seen() + 1);
-                $pointsB = $this->distanceCalculator->getDistance($pacman, $b) * ($b->seen() + 1);
-                //_('A: ' . $a . ' seen ' . $a->seen());
-                //_('B: ' . $b . ' seen ' . $b->seen());
-                if ($pointsA === $pointsB) {
-                    return 0;
-                }
+        $oneCasePellet = false;
+        try {
+            usort(
+                $pellets,
+                function (PelletInterface $a, PelletInterface $b) use ($pacman, &$oneCasePellet) {
+                    // +1 not to multiply by 0
+                    $pointsA = $this->distanceCalculator->getDistance($pacman, $a) * ($a->seen() + 1);
+                    $pointsB = $this->distanceCalculator->getDistance($pacman, $b) * ($b->seen() + 1);
+                    if ($pointsA === 1) {
+                        $oneCasePellet = $a;
+                        throw new Exception();
+                    } elseif ($pointsB === 1) {
+                        $oneCasePellet = $b;
+                        throw new Exception();
+                    }
+                    //if ($GLOBALS['HHPP']) {
+                    //    _('Compare');
+                    //    _('A: ' . $a . ' dist: ' . $this->distanceCalculator->getDistance($pacman, $a) . ' seen: ' . $a->seen());
+                    //    _('B: ' . $b . ' dist: ' . $this->distanceCalculator->getDistance($pacman, $b) . ' seen: ' . $b->seen());
+                    //}
+                    if ($pointsA === $pointsB) {
+                        return 0;
+                    }
 
-                if ($pointsA < $pointsB) {
-                    return -1;
-                }
+                    if ($pointsA < $pointsB) {
+                        return -1;
+                    }
 
-                return 1;
-            }
-        );
+                    return 1;
+                }
+            );
+        } catch (Exception $e) {
+            _('Just exit getTarget');
+            return $oneCasePellet;
+        }
+        if ($pacman->getPosition() === [27, 11]) {
+            _('Small pellets sorted:');
+            _($pellets);
+        }
         return reset($pellets);
     }
 }
@@ -711,7 +736,7 @@ class TargetFinder implements TargetFinderInterface
     {
         // Firstly, check visible cases and remove unexisting pellets
         // Secondly, target super pellets
-        // Thirdly, taret closest pellets
+        // Thirdly, target closest pellets
 
         $start = microtime(true);
 
@@ -727,6 +752,7 @@ class TargetFinder implements TargetFinderInterface
         $freePellets = $this->pelletsManager->getSmallPellets();
         _('Free pellets ' . count($freePellets));
         foreach ($pacmen as $pacman) {
+            _('Pacmen in ' . implode('/', $pacman->getPosition()));
             try {
                 $closestPellet = $this->smallPelletsSorter->getTarget($freePellets, $pacman);
                 $freePellets = array_diff($freePellets, [$closestPellet]);
@@ -734,6 +760,7 @@ class TargetFinder implements TargetFinderInterface
             } catch (PelletNotFoundException $e) {
                 break;
             }
+            _('Choice in ' . (microtime(true) - $start));
         }
         _('Closest pellets identified = ' . (microtime(true) - $start));
 
@@ -765,6 +792,7 @@ class TargetFinder implements TargetFinderInterface
             if ($pacman->canUseAbility()) {
                 $targets[] = 'SPEED ' . $pacman->getId();
                 unset($pacmen[$pacmenKey]);
+                break;
             }
         }
 
